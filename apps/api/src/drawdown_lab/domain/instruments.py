@@ -184,3 +184,36 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
         ),
     ),
 )
+
+
+class InstrumentFamilyNotFoundError(LookupError):
+    pass
+
+
+class InstrumentFamilyMismatchError(ValueError):
+    pass
+
+
+def resolve_family_instrument(
+    family_id: str,
+    target_symbol: str,
+) -> tuple[InstrumentFamily, Instrument]:
+    family = next(
+        (candidate for candidate in INSTRUMENT_FAMILIES if candidate.id == family_id),
+        None,
+    )
+    if family is None:
+        raise InstrumentFamilyNotFoundError(f"Unknown instrument family: {family_id}")
+    target = next(
+        (
+            instrument
+            for instrument in family.instruments
+            if instrument.symbol == target_symbol
+        ),
+        None,
+    )
+    if target is None:
+        raise InstrumentFamilyMismatchError(
+            f"Target symbol {target_symbol} does not belong to family {family_id}"
+        )
+    return family, target
