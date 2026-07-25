@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Evidence-first ETF drawdown research platform"
 requires-python = ">=3.11"
 dependencies = [
+  "numpy>=1.26,<3",
   "pandas>=2.2,<3",
   "pyarrow>=16,<22",
   "yfinance>=0.2.40,<1",
