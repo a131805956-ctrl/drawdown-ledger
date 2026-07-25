@@ -65,6 +65,8 @@ class ContributionSchedule:
             raise ValueError("Contribution day must be between 1 and 31")
         seen: set[tuple[date, str]] = set()
         for event in self.events:
+            if event.kind not in {"bonus", "override", "pause", "resume"}:
+                raise ValueError(f"Unknown contribution event kind: {event.kind}")
             if event.amount < 0:
                 raise ValueError("Contribution event amounts must be non-negative")
             key = (event.month, event.kind)
@@ -113,9 +115,7 @@ class ContributionSchedule:
                 monthly_dates.append(due_date)
             cursor = _next_month(cursor)
         event_dates = {
-            event.month
-            for event in self.events
-            if effective_start <= event.month <= through
+            event.month for event in self.events if effective_start <= event.month <= through
         }
         timeline = sorted(set(monthly_dates) | event_dates)
         due: list[CashFlow] = []
@@ -131,8 +131,7 @@ class ContributionSchedule:
 
             if current in monthly_dates and active:
                 amount = quantize_money(
-                    current_monthly
-                    * (Decimal("1") + self.annual_growth) ** (completed // 12)
+                    current_monthly * (Decimal("1") + self.annual_growth) ** (completed // 12)
                 )
                 if amount:
                     if current >= posting_start:

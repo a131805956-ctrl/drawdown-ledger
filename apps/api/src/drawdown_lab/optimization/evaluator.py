@@ -4,11 +4,11 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pandas as pd
 
-from drawdown_lab.analysis.cashflows import ContributionSchedule
+from drawdown_lab.analysis.cashflows import ContributionEvent, ContributionSchedule
 from drawdown_lab.analysis.episodes import classify_episodes
 from drawdown_lab.analysis.leverage import synthetic_daily_reset_nav
 from drawdown_lab.analysis.strategy import (
@@ -49,6 +49,7 @@ class StrategyTemplate:
     monthly_contribution: Decimal = Decimal("0")
     annual_contribution_growth: Decimal = Decimal("0")
     contribution_day: int = 1
+    contribution_events: tuple[ContributionEvent, ...] = ()
     cash_interest_rate: Decimal = Decimal("0")
     dividend_policy: DividendPolicy | str = DividendPolicy.CASH
     fixed_fee: Decimal = Decimal("0")
@@ -73,6 +74,11 @@ class StrategyTemplate:
             "cash_interest_rate",
             as_decimal(self.cash_interest_rate),
         )
+        object.__setattr__(
+            self,
+            "contribution_events",
+            tuple(self.contribution_events),
+        )
         object.__setattr__(self, "fixed_fee", quantize_money(self.fixed_fee))
         object.__setattr__(self, "fee_rate", as_decimal(self.fee_rate))
         object.__setattr__(self, "slippage", as_decimal(self.slippage))
@@ -92,6 +98,13 @@ class StrategyTemplate:
             or self.slippage < 0
         ):
             raise ValueError("Interest, fees, and slippage cannot be negative")
+        ContributionSchedule(
+            monthly=self.monthly_contribution,
+            annual_growth=self.annual_contribution_growth,
+            start=self.start,
+            events=self.contribution_events,
+            contribution_day=self.contribution_day,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,16 +201,14 @@ class HistoricalOptimizationRequest:
             raise ValueError("Depths must be unique positive ratios no greater than one")
         if self.max_depth_levels <= 0 or len(normalized_depths) > self.max_depth_levels:
             raise ValueError(
-                f"Depth count {len(normalized_depths)} exceeds maximum "
-                f"{self.max_depth_levels}"
+                f"Depth count {len(normalized_depths)} exceeds maximum {self.max_depth_levels}"
             )
         if self.max_candidates <= 0:
             raise ValueError("Maximum candidate count must be positive")
         candidate_count = self.ratio_search.candidate_count(len(normalized_depths))
         if candidate_count > self.max_candidates:
             raise ValueError(
-                f"Candidate count {candidate_count} exceeds maximum "
-                f"{self.max_candidates}"
+                f"Candidate count {candidate_count} exceeds maximum {self.max_candidates}"
             )
 
 
@@ -231,6 +242,14 @@ def historical_request_to_payload(
             "monthly_contribution": str(strategy.monthly_contribution),
             "annual_contribution_growth": str(strategy.annual_contribution_growth),
             "contribution_day": strategy.contribution_day,
+            "contribution_events": [
+                {
+                    "month": event.month.isoformat(),
+                    "kind": event.kind,
+                    "amount": str(event.amount),
+                }
+                for event in strategy.contribution_events
+            ],
             "cash_interest_rate": str(strategy.cash_interest_rate),
             "dividend_policy": DividendPolicy(strategy.dividend_policy).value,
             "fixed_fee": str(strategy.fixed_fee),
@@ -280,6 +299,10 @@ def historical_request_from_payload(
     from drawdown_lab.optimization.scoring import ProfileConstraints
 
     strategy = cast(dict[str, Any], payload["strategy"])
+    contribution_events = cast(
+        list[dict[str, Any]],
+        strategy.get("contribution_events", []),
+    )
     ratio_search = cast(dict[str, Any], payload["ratio_search"])
     walk_forward = cast(dict[str, Any], payload["walk_forward"])
     scoring = cast(dict[str, Any], payload["scoring"])
@@ -306,10 +329,19 @@ def historical_request_from_payload(
             initial_cash=Decimal(str(strategy["initial_cash"])),
             initial_shares=Decimal(str(strategy["initial_shares"])),
             monthly_contribution=Decimal(str(strategy["monthly_contribution"])),
-            annual_contribution_growth=Decimal(
-                str(strategy["annual_contribution_growth"])
-            ),
+            annual_contribution_growth=Decimal(str(strategy["annual_contribution_growth"])),
             contribution_day=int(strategy["contribution_day"]),
+            contribution_events=tuple(
+                ContributionEvent(
+                    month=date.fromisoformat(str(event["month"])).replace(day=1),
+                    kind=cast(
+                        Literal["bonus", "override", "pause", "resume"],
+                        str(event["kind"]),
+                    ),
+                    amount=quantize_money(Decimal(str(event.get("amount", "0")))),
+                )
+                for event in contribution_events
+            ),
             cash_interest_rate=Decimal(str(strategy["cash_interest_rate"])),
             dividend_policy=str(strategy["dividend_policy"]),
             fixed_fee=Decimal(str(strategy["fixed_fee"])),
@@ -343,12 +375,8 @@ def historical_request_from_payload(
             ),
         ),
         scoring=OptimizationRequest(
-            minimum_independent_episodes=int(
-                scoring["minimum_independent_episodes"]
-            ),
-            neighbor_radius_basis_points=int(
-                scoring["neighbor_radius_basis_points"]
-            ),
+            minimum_independent_episodes=int(scoring["minimum_independent_episodes"]),
+            neighbor_radius_basis_points=int(scoring["neighbor_radius_basis_points"]),
             isolated_peak_penalty=float(scoring["isolated_peak_penalty"]),
             conservative=profile("conservative"),
             balanced=profile("balanced"),
@@ -391,10 +419,11 @@ def _strategy_config(
         ContributionSchedule(
             monthly=template.monthly_contribution,
             annual_growth=template.annual_contribution_growth,
-            start=start,
+            start=template.start,
+            events=template.contribution_events,
             contribution_day=template.contribution_day,
         )
-        if template.monthly_contribution > 0
+        if template.monthly_contribution > 0 or template.contribution_events
         else None
     )
     return StrategyConfig(
@@ -493,9 +522,7 @@ def optimize_market_history(
         if request.synthetic_stress.enabled
         else None
     )
-    total = vector_count * len(splits) * 2 + (
-        vector_count if synthetic_frame is not None else 0
-    )
+    total = vector_count * len(splits) * 2 + (vector_count if synthetic_frame is not None else 0)
     completed = 0
     actual_candidates: list[CandidateScore] = []
     synthetic_rows: list[SyntheticStress] = []
@@ -524,10 +551,8 @@ def optimize_market_history(
             train_episode_count = episode_count(train_start, train_end)
             test_episode_count = episode_count(test_start, test_end)
             walk_forward_eligible = walk_forward_eligible and (
-                train_episode_count
-                >= request.walk_forward.minimum_train_independent_episodes
-                and test_episode_count
-                >= request.walk_forward.minimum_test_independent_episodes
+                train_episode_count >= request.walk_forward.minimum_train_independent_episodes
+                and test_episode_count >= request.walk_forward.minimum_test_independent_episodes
             )
             train_result = simulate_strategy(
                 _strategy_config(
@@ -543,11 +568,7 @@ def optimize_market_history(
             if train_result.metrics is None:
                 raise RuntimeError("Strategy simulation did not produce performance metrics")
             train_metrics = train_result.metrics
-            train_xirr = (
-                train_metrics.xirr
-                if train_metrics.xirr is not None
-                else train_metrics.twr
-            )
+            train_xirr = train_metrics.xirr if train_metrics.xirr is not None else train_metrics.twr
             completed += 1
             _checkpoint(
                 completed,
@@ -569,14 +590,10 @@ def optimize_market_history(
             if test_result.metrics is None:
                 raise RuntimeError("Strategy simulation did not produce performance metrics")
             test_metrics = test_result.metrics
-            test_xirr = (
-                test_metrics.xirr if test_metrics.xirr is not None else test_metrics.twr
-            )
+            test_xirr = test_metrics.xirr if test_metrics.xirr is not None else test_metrics.twr
             fold_xirr.append(test_xirr)
             fold_worst_tail.append(test_metrics.expected_shortfall_5)
-            fold_depletion.append(
-                1.0 if test_metrics.cash_depletion_date is not None else 0.0
-            )
+            fold_depletion.append(1.0 if test_metrics.cash_depletion_date is not None else 0.0)
             fold_trap_days.append(test_metrics.longest_underwater_days)
             fold_evaluations.append(
                 WalkForwardFoldEvaluation(
@@ -646,9 +663,7 @@ def optimize_market_history(
 
     for fold_index in range(len(splits)):
         eligible = tuple(
-            candidate
-            for candidate in actual_candidates
-            if candidate.walk_forward_eligible
+            candidate for candidate in actual_candidates if candidate.walk_forward_eligible
         )
         if not eligible:
             break
