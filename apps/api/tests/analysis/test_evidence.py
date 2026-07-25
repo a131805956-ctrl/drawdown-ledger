@@ -94,6 +94,53 @@ def test_daily_cohort_count_does_not_inflate_episode_statistics() -> None:
     assert report.horizon_statistics[0].n == 1
 
 
+def test_daily_cohort_materializes_overlapping_rows_and_statistics() -> None:
+    prototype = _market_frame([100, 80, 75, 90, 101, 79, 102])
+    traded = _market_frame([100, 80, 75, 90, 101, 79, 102])
+    request = EvidenceRequest(
+        threshold=0.20,
+        horizons=(1,),
+        bootstrap_iterations=200,
+        bootstrap_block_size=2,
+        bootstrap_seed=20260726,
+    )
+
+    first = analyze_evidence(request, prototype, traded)
+    second = analyze_evidence(request, prototype, traded)
+
+    assert [row.signal_date.isoformat() for row in first.daily_observations] == [
+        "2020-03-12",
+        "2020-03-13",
+        "2020-03-18",
+    ]
+    assert first.n_day == len(first.daily_observations) == 3
+    assert first.n_episode == len(first.episodes) == 2
+    assert [row.total_return(1) for row in first.daily_observations] == pytest.approx(
+        [0.20, 11 / 90, None],
+        nan_ok=True,
+    )
+    assert first.daily_observations[0].mae == first.episodes[0].mae
+    assert first.daily_observations[0].mfe == first.episodes[0].mfe
+
+    daily_stats = first.daily_statistics[0]
+    episode_stats = first.episode_statistics[0]
+    assert daily_stats.n == 2
+    assert episode_stats.n == 1
+    assert daily_stats.sample_kind == "daily_overlapping"
+    assert daily_stats.independent is False
+    assert "overlap" in daily_stats.overlap_warning.lower()
+    assert episode_stats.sample_kind == "independent_episodes"
+    assert episode_stats.independent is True
+    assert episode_stats.overlap_warning is None
+    assert (
+        daily_stats.confidence_lower,
+        daily_stats.confidence_upper,
+    ) == (
+        second.daily_statistics[0].confidence_lower,
+        second.daily_statistics[0].confidence_upper,
+    )
+
+
 def test_expected_shortfall_uses_the_worst_five_percent_tail() -> None:
     assert expected_shortfall_5([0.10, -0.50, -0.20, 0.30]) == pytest.approx(-0.50)
 
