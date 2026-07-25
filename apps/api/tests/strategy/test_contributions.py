@@ -28,15 +28,24 @@ def test_salary_growth_and_bonus_are_applied_on_effective_month() -> None:
     assert schedule.amount_for(date(2027, 3, 1)) == Decimal("61000.00")
 
 
-def test_default_schedule_epoch_matches_the_2026_plan_year() -> None:
+def test_schedule_without_explicit_start_rebases_to_strategy_plan_start() -> None:
     schedule = ContributionSchedule(
         monthly=Decimal("10000"),
         annual_growth=Decimal("0.10"),
-        events=(bonus("2027-03", Decimal("50000")),),
     )
 
-    assert schedule.amount_for(date(2027, 1, 1)) == Decimal("11000.00")
-    assert schedule.amount_for(date(2027, 3, 1)) == Decimal("61000.00")
+    assert schedule.amount_for(
+        date(2030, 2, 1),
+        plan_start=date(2030, 2, 1),
+    ) == Decimal("10000.00")
+    assert schedule.amount_for(
+        date(2031, 1, 1),
+        plan_start=date(2030, 2, 1),
+    ) == Decimal("10000.00")
+    assert schedule.amount_for(
+        date(2031, 2, 1),
+        plan_start=date(2030, 2, 1),
+    ) == Decimal("11000.00")
 
 
 def test_growth_applies_only_after_twelve_completed_contribution_months() -> None:
@@ -65,7 +74,7 @@ def test_override_pause_resume_and_bonus_events_are_deterministic() -> None:
 
     assert schedule.amount_for(date(2026, 2, 1)) == Decimal("12500.00")
     assert schedule.amount_for(date(2026, 3, 1)) == Decimal("0.00")
-    assert schedule.amount_for(date(2026, 4, 1)) == Decimal("10000.00")
+    assert schedule.amount_for(date(2026, 4, 1)) == Decimal("12000.00")
 
 
 def test_cash_interest_uses_actual_days_over_365() -> None:
@@ -134,3 +143,47 @@ def test_monthly_deposits_continue_when_no_tier_triggers() -> None:
     assert result.trades == ()
     assert result.contribution_total == Decimal("300.00")
     assert result.cash == Decimal("300.00")
+
+
+def test_sparse_sessions_accumulate_every_missed_calendar_month() -> None:
+    frame = _frame(["2021-01-04", "2021-03-15"], [100, 101])
+    schedule = ContributionSchedule(monthly=Decimal("100"))
+    config = StrategyConfig(
+        start=date(2021, 1, 1),
+        initial_cash=Decimal("0"),
+        tiers=(),
+        contributions=schedule,
+    )
+
+    result = simulate_strategy(config, frame, frame)
+
+    assert [point.cash for point in result.equity_curve] == [
+        Decimal("100.00"),
+        Decimal("300.00"),
+    ]
+    assert result.contribution_total == Decimal("300.00")
+
+
+def test_dated_set_and_one_time_events_post_on_next_valid_session() -> None:
+    frame = _frame(["2021-01-04", "2021-03-15", "2021-04-01"], [100, 101, 102])
+    schedule = ContributionSchedule(
+        monthly=Decimal("100"),
+        events=(
+            override(date(2021, 2, 1), Decimal("200")),
+            bonus(date(2021, 2, 15), Decimal("50")),
+        ),
+    )
+    config = StrategyConfig(
+        start=date(2021, 1, 1),
+        initial_cash=Decimal("0"),
+        tiers=(),
+        contributions=schedule,
+    )
+
+    result = simulate_strategy(config, frame, frame)
+
+    assert [point.cash for point in result.equity_curve] == [
+        Decimal("100.00"),
+        Decimal("550.00"),
+        Decimal("750.00"),
+    ]

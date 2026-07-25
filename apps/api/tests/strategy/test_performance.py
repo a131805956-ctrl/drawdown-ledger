@@ -57,6 +57,25 @@ def test_xirr_requires_both_cashflow_signs() -> None:
         xirr((CashFlow(date(2020, 1, 1), Decimal("-1000")),))
 
 
+def test_initial_shares_are_included_in_opening_xirr_market_value() -> None:
+    frame = _frame([100, 110])
+    frame.data.index = pd.DatetimeIndex(["2020-01-01", "2021-01-01"])
+    config = StrategyConfig(
+        start=date(2020, 1, 1),
+        initial_cash=Decimal("0"),
+        initial_shares=Decimal("10"),
+        tiers=(),
+    )
+
+    result = simulate_strategy(config, frame, frame)
+
+    assert result.external_cashflows[0] == CashFlow(
+        date(2020, 1, 1),
+        Decimal("-1000.00"),
+    )
+    assert result.metrics.xirr == pytest.approx(0.0997136, abs=1e-6)
+
+
 def test_time_weighted_return_removes_external_cashflows() -> None:
     values = [Decimal("100"), Decimal("210"), Decimal("231")]
     external_flows = [Decimal("0"), Decimal("100"), Decimal("0")]
@@ -76,6 +95,13 @@ def test_path_risk_metrics_use_peak_relative_values_and_actual_dates() -> None:
     assert max_drawdown(values) == pytest.approx(0.25)
     assert expected_shortfall_5([0.10, -0.20, 0.05, -0.10]) == pytest.approx(-0.20)
     assert longest_underwater_days(values, dates) == 6
+
+
+def test_underwater_recovery_equality_records_full_calendar_interval() -> None:
+    assert longest_underwater_days(
+        [100.0, 80.0, 100.0],
+        [date(2020, 1, 1), date(2020, 1, 10), date(2020, 1, 20)],
+    ) == 19
 
 
 def test_result_reports_cash_depletion_and_deepest_missed_tier() -> None:

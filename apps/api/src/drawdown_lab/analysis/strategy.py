@@ -65,6 +65,8 @@ class StrategyConfig:
             raise ValueError("End date cannot precede start date")
         if self.fixed_fee < 0 or self.fee_rate < 0 or self.slippage < 0:
             raise ValueError("Fees and slippage must be non-negative")
+        if self.cash_interest_rate < 0:
+            raise ValueError("Cash interest rate must be non-negative")
         if self.scheduled_initial_months < 0:
             raise ValueError("Scheduled initial months must be non-negative")
         depths = tuple(tier.depth for tier in self.tiers)
@@ -182,6 +184,18 @@ def simulate_strategy(
         set(prototype_data.loc[start_stamp:end_stamp].index)
         | set(traded_data.loc[start_stamp:end_stamp].index)
     )
+    opening_value = config.initial_cash
+    if config.initial_shares:
+        start_opens = traded_data.loc[start_stamp:end_stamp, "raw_open"]
+        first_valid_open = next(
+            (value for value in start_opens if _valid_positive(value)),
+            None,
+        )
+        if first_valid_open is None:
+            raise ValueError("Initial shares require a valid raw open valuation price")
+        opening_value = quantize_money(
+            opening_value + config.initial_shares * _decimal(first_valid_open)
+        )
     cash = config.initial_cash
     shares = config.initial_shares
     dividend_income = Decimal("0.00")
@@ -190,7 +204,8 @@ def simulate_strategy(
     total_fees = Decimal("0.00")
     trades: list[Trade] = []
     equity_curve: list[PortfolioPoint] = []
-    external_cashflows = [CashFlow(config.start, -config.initial_cash)]
+    # Opening holdings are valued at the first valid raw open on/after start.
+    external_cashflows = [CashFlow(config.start, -opening_value)]
     pending: list[_Order] = []
     pending_dividends: list[_DividendOrder] = []
     passive_pending: list[tuple[Date, Money, str]] = []
@@ -202,10 +217,14 @@ def simulate_strategy(
     )
     missed_thresholds: list[Decimal] = []
     triggered: set[Decimal] = set()
-    deposited_months: set[tuple[int, int]] = set()
     last_open_date = config.start
     last_close = Decimal("0")
     first_cycle_shares: Decimal | None = None
+    pending_contributions = (
+        list(config.contributions.due_cashflows(end, plan_start=config.start))
+        if config.contributions is not None
+        else []
+    )
 
     for timestamp in event_dates:
         current_date = timestamp.date()
@@ -213,6 +232,7 @@ def simulate_strategy(
         if timestamp in traded_data.index:
             row = traded_data.loc[timestamp]
             external_flow_today = Decimal("0.00")
+            raw_open = row["raw_open"]
             actual_days = (current_date - last_open_date).days
             if actual_days:
                 before_interest = cash
@@ -229,10 +249,10 @@ def simulate_strategy(
             last_open_date = current_date
 
             month_key = (current_date.year, current_date.month)
-            if config.contributions is not None and month_key not in deposited_months:
-                contribution = config.contributions.amount_for(current_date)
-                deposited_months.add(month_key)
-                if contribution:
+            if _valid_positive(raw_open):
+                while pending_contributions and pending_contributions[0].date <= current_date:
+                    due_contribution = pending_contributions.pop(0)
+                    contribution = due_contribution.amount
                     cash += contribution
                     contribution_total += contribution
                     external_flow_today += contribution
@@ -252,7 +272,6 @@ def simulate_strategy(
                 if config.dividend_policy is DividendPolicy.REINVEST:
                     pending_dividends.append(_DividendOrder(current_date, received))
 
-            raw_open = row["raw_open"]
             if (
                 config.scheduled_initial_months
                 and month_key not in initial_months_invested

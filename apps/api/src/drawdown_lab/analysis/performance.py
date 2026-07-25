@@ -117,12 +117,17 @@ def longest_underwater_days(
     peak = float(values[0])
     peak_date = dates[0]
     longest = 0
+    underwater = False
     for value, current_date in zip(values[1:], dates[1:], strict=True):
         numeric = float(value)
         if numeric >= peak:
+            if underwater:
+                longest = max(longest, (current_date - peak_date).days)
             peak = numeric
             peak_date = current_date
+            underwater = False
         else:
+            underwater = True
             longest = max(longest, (current_date - peak_date).days)
     return longest
 
