@@ -1,0 +1,161 @@
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { vi } from "vitest";
+
+import { App } from "../src/app/App";
+import type {
+    DataHealthResponse,
+    InstrumentListResponse,
+    MarketOverviewResponse,
+} from "../src/lib/contracts";
+import type { ResearchApi } from "../src/lib/api";
+
+const instruments: InstrumentListResponse = {
+    schema_version: "1.0",
+    instruments: [
+        {
+            symbol: "QQQ",
+            name: "Invesco QQQ Trust",
+            family_id: "nasdaq-100",
+            leverage: 1,
+            prototype_symbol: "QQQ",
+            currency: "USD",
+            timezone: "America/New_York",
+            inception: null,
+        },
+        {
+            symbol: "TQQQ",
+            name: "ProShares UltraPro QQQ",
+            family_id: "nasdaq-100",
+            leverage: 3,
+            prototype_symbol: "QQQ",
+            currency: "USD",
+            timezone: "America/New_York",
+            inception: null,
+        },
+    ],
+};
+
+const overview: MarketOverviewResponse = {
+    schema_version: "1.0",
+    instrument_count: 16,
+    cached_symbols: ["QQQ", "TQQQ"],
+    formal_result_count: 4,
+};
+
+const health: DataHealthResponse = {
+    schema_version: "1.0",
+    status: "healthy",
+    coverage: [
+        {
+            symbol: "QQQ",
+            cached: true,
+            actual_last_session: "2026-06-30",
+            policy_cutoff: "2026-06-30",
+        },
+        {
+            symbol: "TQQQ",
+            cached: false,
+            actual_last_session: null,
+            policy_cutoff: "2026-06-30",
+        },
+    ],
+};
+
+function apiWith(
+    values: {
+        instruments?: InstrumentListResponse;
+        overview?: MarketOverviewResponse;
+        health?: DataHealthResponse;
+    } = {},
+): ResearchApi {
+    return {
+        getInstruments: vi
+            .fn()
+            .mockResolvedValue(values.instruments ?? instruments),
+        getMarketOverview: vi
+            .fn()
+            .mockResolvedValue(values.overview ?? overview),
+        getDataHealth: vi.fn().mockResolvedValue(values.health ?? health),
+    };
+}
+
+function renderPath(path: string, api: ResearchApi) {
+    return render(
+        <MemoryRouter initialEntries={[path]}>
+            <App api={api} capability={{ mode: "live" }} />
+        </MemoryRouter>,
+    );
+}
+
+describe("market overview route", () => {
+    it("summarizes the real API overview contract", async () => {
+        renderPath("/", apiWith());
+
+        expect(
+            await screen.findByRole("heading", { name: "市場總覽" }),
+        ).toBeVisible();
+        expect(screen.getByText("16")).toBeVisible();
+        expect(screen.getByText("2 / 16")).toBeVisible();
+        expect(screen.getByText("4")).toBeVisible();
+        expect(screen.getAllByText("NASDAQ-100").length).toBeGreaterThan(0);
+    });
+
+    it("offers direction when the API has no overview data", async () => {
+        renderPath(
+            "/",
+            apiWith({
+                instruments: {
+                    schema_version: "1.0",
+                    instruments: [],
+                },
+                overview: {
+                    schema_version: "1.0",
+                    instrument_count: 0,
+                    cached_symbols: [],
+                    formal_result_count: 0,
+                },
+            }),
+        );
+
+        expect(
+            await screen.findByText("尚無市場總覽資料"),
+        ).toBeVisible();
+        expect(
+            screen.getByText("先到資料健康度確認快取，再開始研究。"),
+        ).toBeVisible();
+    });
+
+    it("shows a route-level error with a retry action", async () => {
+        const api = apiWith();
+        vi.mocked(api.getMarketOverview).mockRejectedValue(
+            new Error("service unavailable"),
+        );
+        renderPath("/", api);
+
+        expect(
+            await screen.findByRole("alert", { name: "無法載入市場總覽" }),
+        ).toBeVisible();
+        expect(
+            screen.getByRole("button", { name: "重新讀取市場總覽" }),
+        ).toBeEnabled();
+    });
+});
+
+describe("data health route", () => {
+    it("distinguishes the policy cutoff from the observed session", async () => {
+        renderPath("/data-health", apiWith());
+
+        expect(
+            await screen.findByRole("heading", { name: "資料健康度" }),
+        ).toBeVisible();
+        expect(screen.getByRole("row", { name: /^QQQ / })).toHaveTextContent(
+            "2026-06-30",
+        );
+        expect(screen.getByRole("row", { name: /^TQQQ / })).toHaveTextContent(
+            "尚未快取",
+        );
+        expect(screen.getByText("政策截止日")).toBeVisible();
+        expect(screen.getByText("實際最後交易日")).toBeVisible();
+    });
+});
