@@ -1,0 +1,8 @@
+{
+  "name": "drawdown-lab",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test:data": "python -m pytest apps/api/tests/data -q"
+  }
+}

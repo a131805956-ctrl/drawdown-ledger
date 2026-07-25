@@ -30,7 +30,7 @@ test-results/
 coverage/
 
 # Private market and research data
-data/
+/data/
 reports/private/
 reports/published/*
 !reports/published/.gitkeep
