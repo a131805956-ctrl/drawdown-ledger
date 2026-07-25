@@ -13,7 +13,7 @@ from drawdown_lab.analysis.chart_series import (
 )
 from drawdown_lab.analysis.episodes import classify_episodes
 from drawdown_lab.analysis.evidence import analyze_evidence
-from drawdown_lab.analysis.strategy import simulate_strategy
+from drawdown_lab.analysis.strategy import StrategyResult, simulate_strategy
 from drawdown_lab.api.schemas import (
     ChartPointResponse,
     ChartSeriesResponse,
@@ -400,11 +400,7 @@ def _chart_response(
     )
 
 
-def _portfolio_points(result: object) -> tuple[PortfolioPointResponse, ...]:
-    from drawdown_lab.analysis.strategy import StrategyResult
-
-    if not isinstance(result, StrategyResult):
-        raise TypeError("Expected a strategy result")
+def _portfolio_points(result: StrategyResult) -> tuple[PortfolioPointResponse, ...]:
     opening_investment = (
         -result.external_cashflows[0].amount if result.external_cashflows else Decimal("0")
     )
