@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import drawdown_lab.data.catalog as catalog_module
 import pandas as pd
 import pytest
 from drawdown_lab.data.catalog import DataCatalog
@@ -134,6 +135,29 @@ def test_metadata_failure_restores_exact_prior_parquet_bytes(tmp_path: Path) -> 
         catalog.store("QQQ", market_frame_through("2026-07-31"))
 
     assert catalog.path_for("QQQ").read_bytes() == original_bytes
+    assert catalog.coverage_end("QQQ") == date(2026, 7, 30)
+
+
+def test_failed_original_to_backup_move_leaves_prior_parquet_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = DataCatalog(tmp_path)
+    catalog.store("QQQ", market_frame_through("2026-07-30"))
+    path = catalog.path_for("QQQ")
+    original_bytes = path.read_bytes()
+    original_replace = catalog_module.os.replace
+
+    def fail_original_backup_move(source: Path, destination: Path) -> None:
+        if source == path:
+            raise PermissionError("original cache is locked")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(catalog_module.os, "replace", fail_original_backup_move)
+
+    with pytest.raises(PermissionError, match="cache is locked"):
+        catalog.store("QQQ", market_frame_through("2026-07-31"))
+
+    assert path.read_bytes() == original_bytes
     assert catalog.coverage_end("QQQ") == date(2026, 7, 30)
 
 

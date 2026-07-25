@@ -101,26 +101,28 @@ class DataCatalog:
         actual_last_session = frame.data.index[-1].date()
         policy_cutoff = completed_cutoff or actual_last_session
         had_existing_file = path.exists()
+        backup_created = False
+        new_file_installed = False
         try:
             frame.data.to_parquet(temporary_path)
             if had_existing_file:
                 os.replace(path, backup_path)
+                backup_created = True
             os.replace(temporary_path, path)
+            new_file_installed = True
             self._commit_metadata(symbol, actual_last_session, policy_cutoff)
         except Exception:
-            if path.exists():
+            if new_file_installed and path.exists():
                 path.unlink()
-            if had_existing_file and backup_path.exists():
+            if backup_created and backup_path.exists():
                 os.replace(backup_path, path)
             raise
         else:
-            if backup_path.exists():
+            if backup_created and backup_path.exists():
                 backup_path.unlink()
         finally:
             if temporary_path.exists():
                 temporary_path.unlink()
-            if backup_path.exists():
-                backup_path.unlink()
 
     def _commit_metadata(
         self, symbol: str, actual_last_session: date, completed_cutoff: date
