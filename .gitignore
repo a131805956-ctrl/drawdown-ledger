@@ -1,0 +1,50 @@
+# Agent and worktree scratch
+.superpowers/
+.worktrees/
+
+# Runtime state and secrets
+.env
+.env.*
+!.env.example
+.runtime/
+*.pid
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+*.egg-info/
+dist/
+build/
+
+# Node and browser tests
+node_modules/
+apps/web/node_modules/
+apps/web/dist/
+playwright-report/
+test-results/
+coverage/
+
+# Private market and research data
+data/
+reports/private/
+reports/published/*
+!reports/published/.gitkeep
+*.sqlite
+*.sqlite3
+*.db
+*.parquet
+
+# Local operations
+backups/
+*.log
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
