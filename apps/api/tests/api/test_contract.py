@@ -78,3 +78,24 @@ def test_settings_default_data_root_is_usable_for_app_factory(tmp_path: Path) ->
 
     assert response.status_code == 200
     assert (tmp_path / "data" / "catalog.sqlite").exists()
+
+
+def test_openapi_advertises_versioned_error_model_for_custom_4xx(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path) as client:
+        schema = client.get("/openapi.json").json()
+
+    optimization = schema["paths"]["/api/v1/optimizations"]["post"]["responses"]
+    cancel = schema["paths"]["/api/v1/jobs/{job_id}/cancel"]["post"]["responses"]
+    assert optimization["404"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/ErrorResponse"
+    )
+    assert optimization["422"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/ErrorResponse"
+    )
+    assert cancel["409"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/ErrorResponse"
+    )
+    issue = schema["components"]["schemas"]["ValidationIssue"]
+    assert issue["additionalProperties"] is False

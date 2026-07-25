@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from drawdown_lab.optimization.grid import (
+    count_ratio_grid,
     generate_grid,
     generate_monotone_grid,
     generate_ratio_grid,
@@ -53,3 +54,27 @@ def test_basis_point_range_grid_is_generated_internally_with_exact_bounds() -> N
         (4000, 6000),
         (6000, 6000),
     ]
+
+
+def test_candidate_count_uses_closed_form_without_enumerating_pathological_grid() -> None:
+    assert count_ratio_grid(
+        levels=4,
+        minimum_basis_points=0,
+        maximum_basis_points=10_000,
+        step_basis_points=1_000,
+        monotone=True,
+    ) == 1001
+    assert count_ratio_grid(
+        levels=4,
+        minimum_basis_points=0,
+        maximum_basis_points=10_000,
+        step_basis_points=1_000,
+        monotone=False,
+    ) == 14641
+    assert count_ratio_grid(
+        levels=4,
+        minimum_basis_points=0,
+        maximum_basis_points=10_000,
+        step_basis_points=1,
+        monotone=False,
+    ) == 10_004_000_600_040_001

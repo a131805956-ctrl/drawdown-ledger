@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from drawdown_lab.analysis.evidence import EvidenceRequest
 from drawdown_lab.analysis.strategy import StrategyConfig, ThresholdTier
@@ -28,7 +28,7 @@ UnitDecimal = Annotated[Decimal, Field(ge=0, le=1)]
 
 
 class ApiModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class VersionedModel(ApiModel):
@@ -205,8 +205,8 @@ class StrategyBacktestResponse(VersionedModel):
 
 class ProfileConstraintsInput(ApiModel):
     worst_5_floor: float
-    max_early_depletion_rate: float
-    max_longest_trap_days: int
+    max_early_depletion_rate: float = Field(ge=0.0, le=1.0)
+    max_longest_trap_days: int = Field(ge=0)
 
     def to_domain(self) -> ProfileConstraints:
         return ProfileConstraints(
@@ -282,12 +282,18 @@ class WalkForwardInput(ApiModel):
     n_splits: int = Field(default=3, gt=0)
     minimum_train_sessions: int | None = Field(default=None, gt=0)
     test_size_sessions: int | None = Field(default=None, gt=0)
+    minimum_train_independent_episodes: int = Field(default=1, ge=0)
+    minimum_test_independent_episodes: int = Field(default=1, ge=0)
 
     def to_domain(self) -> WalkForwardSettings:
         return WalkForwardSettings(
             n_splits=self.n_splits,
             minimum_train_sessions=self.minimum_train_sessions,
             test_size_sessions=self.test_size_sessions,
+            minimum_train_independent_episodes=(
+                self.minimum_train_independent_episodes
+            ),
+            minimum_test_independent_episodes=self.minimum_test_independent_episodes,
         )
 
 
@@ -314,6 +320,8 @@ class OptimizationCreateRequest(VersionedModel):
     ratio_search: RatioSearchInput = RatioSearchInput()
     walk_forward: WalkForwardInput = WalkForwardInput()
     synthetic_stress: SyntheticStressRequest = SyntheticStressRequest()
+    max_depth_levels: int = Field(default=8, ge=1, le=16)
+    max_candidates: int = Field(default=14_641, ge=1, le=100_000)
     minimum_independent_episodes: int = Field(default=5, gt=0)
     neighbor_radius_basis_points: int = Field(default=1000, gt=0)
     isolated_peak_penalty: float = Field(default=1.25, ge=0.0)
@@ -350,6 +358,8 @@ class OptimizationCreateRequest(VersionedModel):
             prototype_symbol=prototype_symbol,
             target_symbol=self.target_symbol,
             target_leverage=target_leverage,
+            max_depth_levels=self.max_depth_levels,
+            max_candidates=self.max_candidates,
             strategy=self.strategy.to_domain(),
             depths=self.depths,
             ratio_search=self.ratio_search.to_domain(),
@@ -425,6 +435,19 @@ class SyntheticStressSummaryResponse(ApiModel):
     passed_candidates: int
 
 
+class WalkForwardFoldEvaluationResponse(ApiModel):
+    fold_number: int
+    train_start: date
+    train_end: date
+    test_start: date
+    test_end: date
+    train_independent_episode_count: int
+    test_independent_episode_count: int
+    train_xirr: float
+    test_xirr: float
+    training_selected: bool
+
+
 class OptimizationCandidateResponse(ApiModel):
     ratios: tuple[int, ...]
     fold_oos_xirr: tuple[float, ...]
@@ -437,6 +460,8 @@ class OptimizationCandidateResponse(ApiModel):
     longest_trap_days: int
     synthetic_stress_pass: bool | None
     pareto_member: bool
+    fold_evaluations: tuple[WalkForwardFoldEvaluationResponse, ...]
+    walk_forward_eligible: bool
     recommendation_labels: tuple[
         Literal["conservative", "balanced", "aggressive"],
         ...,
@@ -460,22 +485,42 @@ class OptimizationResultPayload(VersionedModel):
     synthetic_stress: SyntheticStressSummaryResponse
 
 
+class LegacyOptimizationPayload(ApiModel):
+    payload_type: Literal["legacy"] = "legacy"
+    stored_schema_version: str
+    raw_json: str
+
+
 class ResultResponse(VersionedModel):
     id: str
     job_id: str
     kind: str
-    payload: OptimizationResultPayload
+    payload: OptimizationResultPayload | LegacyOptimizationPayload
     created_at: str
 
     @classmethod
     def from_record(cls, record: ResultRecord) -> ResultResponse:
-        schema_version = cast(Literal["1.0"], record.schema_version)
+        if record.schema_version != SCHEMA_VERSION:
+            payload: OptimizationResultPayload | LegacyOptimizationPayload = (
+                LegacyOptimizationPayload(
+                    stored_schema_version=record.schema_version,
+                    raw_json=record.raw_json,
+                )
+            )
+        else:
+            try:
+                payload = OptimizationResultPayload.model_validate(record.payload)
+            except ValidationError:
+                payload = LegacyOptimizationPayload(
+                    stored_schema_version=record.schema_version,
+                    raw_json=record.raw_json,
+                )
         return cls(
-            schema_version=schema_version,
+            schema_version=SCHEMA_VERSION,
             id=record.id,
             job_id=record.job_id,
             kind=record.kind,
-            payload=OptimizationResultPayload.model_validate(record.payload),
+            payload=payload,
             created_at=record.created_at,
         )
 
@@ -491,28 +536,46 @@ class ReportContentResponse(ApiModel):
     optimization: OptimizationResultPayload
 
 
+class LegacyReportContent(ApiModel):
+    content_type: Literal["legacy"] = "legacy"
+    stored_schema_version: str
+    raw_json: str
+
+
 class ReportResponse(VersionedModel):
     id: str
     result_id: str | None
     title: str
     export_status: Literal["not_yet_exported", "exported"]
-    content: ReportContentResponse
+    content: ReportContentResponse | LegacyReportContent
     created_at: str
 
     @classmethod
     def from_record(cls, record: ReportRecord) -> ReportResponse:
-        schema_version = cast(Literal["1.0"], record.schema_version)
         export_status = cast(
             Literal["not_yet_exported", "exported"],
             record.export_status,
         )
+        if record.schema_version != SCHEMA_VERSION:
+            content: ReportContentResponse | LegacyReportContent = LegacyReportContent(
+                stored_schema_version=record.schema_version,
+                raw_json=record.raw_json,
+            )
+        else:
+            try:
+                content = ReportContentResponse.model_validate(record.content)
+            except ValidationError:
+                content = LegacyReportContent(
+                    stored_schema_version=record.schema_version,
+                    raw_json=record.raw_json,
+                )
         return cls(
-            schema_version=schema_version,
+            schema_version=SCHEMA_VERSION,
             id=record.id,
             result_id=record.result_id,
             title=record.title,
             export_status=export_status,
-            content=ReportContentResponse.model_validate(record.content),
+            content=content,
             created_at=record.created_at,
         )
 
@@ -521,5 +584,12 @@ class ReportListResponse(VersionedModel):
     reports: tuple[ReportResponse, ...]
 
 
+class ValidationIssue(ApiModel):
+    type: str
+    loc: tuple[str | int, ...]
+    msg: str
+    input_json: str | None = None
+
+
 class ErrorResponse(VersionedModel):
-    detail: str
+    detail: str | tuple[ValidationIssue, ...]

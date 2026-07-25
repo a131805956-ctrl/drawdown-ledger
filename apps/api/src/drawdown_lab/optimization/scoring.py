@@ -20,6 +20,35 @@ def _validate_ratios(ratios: tuple[int, ...]) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class WalkForwardFoldEvaluation:
+    fold_number: int
+    train_start: date
+    train_end: date
+    test_start: date
+    test_end: date
+    train_independent_episode_count: int
+    test_independent_episode_count: int
+    train_xirr: float
+    test_xirr: float
+    training_selected: bool = False
+
+    def __post_init__(self) -> None:
+        if self.fold_number <= 0:
+            raise ValueError("Fold number must be positive")
+        if self.train_start > self.train_end or self.test_start > self.test_end:
+            raise ValueError("Fold date ranges must be ordered")
+        if self.train_end >= self.test_start:
+            raise ValueError("Training range must end before its test range")
+        if (
+            self.train_independent_episode_count < 0
+            or self.test_independent_episode_count < 0
+        ):
+            raise ValueError("Fold episode counts cannot be negative")
+        if not isfinite(self.train_xirr) or not isfinite(self.test_xirr):
+            raise ValueError("Fold train and test XIRRs must be finite")
+
+
+@dataclass(frozen=True, slots=True)
 class CandidateScore:
     """Actual-history out-of-sample measurements for one parameter vector."""
 
@@ -28,6 +57,8 @@ class CandidateScore:
     worst_5_return: float
     early_depletion_rate: float
     longest_trap_days: int
+    fold_evaluations: tuple[WalkForwardFoldEvaluation, ...] = ()
+    walk_forward_eligible: bool = True
 
     def __post_init__(self) -> None:
         _validate_ratios(self.ratios)
@@ -39,6 +70,14 @@ class CandidateScore:
             raise ValueError("Early depletion rate must be between zero and one")
         if self.longest_trap_days < 0:
             raise ValueError("Longest trap duration cannot be negative")
+        if self.fold_evaluations and len(self.fold_evaluations) != len(
+            self.fold_oos_xirr
+        ):
+            raise ValueError("Fold evidence must match out-of-sample fold scores")
+        if self.fold_evaluations and tuple(
+            fold.test_xirr for fold in self.fold_evaluations
+        ) != self.fold_oos_xirr:
+            raise ValueError("Out-of-sample scores must come from fold test metrics")
 
     @property
     def oos_xirr(self) -> float:
@@ -81,6 +120,17 @@ class ProfileConstraints:
     max_early_depletion_rate: float
     max_longest_trap_days: int
 
+    def __post_init__(self) -> None:
+        if not isfinite(self.worst_5_floor):
+            raise ValueError("Worst-five-percent floor must be finite")
+        if (
+            not isfinite(self.max_early_depletion_rate)
+            or not 0.0 <= self.max_early_depletion_rate <= 1.0
+        ):
+            raise ValueError("Maximum depletion rate must be between zero and one")
+        if self.max_longest_trap_days < 0:
+            raise ValueError("Maximum trap duration cannot be negative")
+
     def accepts(self, candidate: CandidateScore) -> bool:
         return (
             candidate.worst_5_return >= self.worst_5_floor
@@ -121,6 +171,8 @@ class ScoredCandidate:
     synthetic_stress_pass: bool | None
     pareto_member: bool
     recommendation_labels: tuple[ProfileName, ...] = ()
+    fold_evaluations: tuple[WalkForwardFoldEvaluation, ...] = ()
+    walk_forward_eligible: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +283,8 @@ def _score_candidates(
                 longest_trap_days=candidate.longest_trap_days,
                 synthetic_stress_pass=stress_by_ratio.get(candidate.ratios),
                 pareto_member=is_pareto,
+                fold_evaluations=candidate.fold_evaluations,
+                walk_forward_eligible=candidate.walk_forward_eligible,
             )
         )
     return tuple(scored)
@@ -241,7 +295,11 @@ def _choose_for_profile(
     scored: tuple[ScoredCandidate, ...],
     constraints: ProfileConstraints,
 ) -> ScoredCandidate | None:
-    eligible_ratios = {candidate.ratios for candidate in actual if constraints.accepts(candidate)}
+    eligible_ratios = {
+        candidate.ratios
+        for candidate in actual
+        if candidate.walk_forward_eligible and constraints.accepts(candidate)
+    }
     eligible = tuple(row for row in scored if row.ratios in eligible_ratios)
     if not eligible:
         return None
@@ -274,7 +332,10 @@ def optimize(
     """Rank actual-history OOS candidates; synthetic history is stress-only metadata."""
 
     scored = _score_candidates(frames.actual_candidates, request, frames.synthetic_stress)
-    if frames.independent_episode_count < request.minimum_independent_episodes:
+    if (
+        frames.independent_episode_count < request.minimum_independent_episodes
+        or not any(candidate.walk_forward_eligible for candidate in frames.actual_candidates)
+    ):
         return OptimizationResult(
             mode="exploration_only",
             independent_episode_count=frames.independent_episode_count,

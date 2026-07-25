@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from drawdown_lab.api.app import Settings, create_app
+from drawdown_lab.api.schemas import OptimizationCreateRequest
 from drawdown_lab.data.catalog import DataCatalog
 from drawdown_lab.data.models import MarketFrame
 from fastapi.testclient import TestClient
@@ -64,7 +67,12 @@ def _request() -> dict[str, object]:
             "step_basis_points": 10000,
             "monotone": True,
         },
-        "walk_forward": {"n_splits": 2, "test_size_sessions": 8},
+        "walk_forward": {
+            "n_splits": 2,
+            "test_size_sessions": 8,
+            "minimum_train_independent_episodes": 0,
+            "minimum_test_independent_episodes": 1,
+        },
         "minimum_independent_episodes": 1,
         "isolated_peak_penalty": 0.0,
         "conservative": broad,
@@ -104,8 +112,8 @@ def test_optimizer_uses_trusted_cached_symbols_and_internal_simulations(
         result = client.get(f"/api/v1/results/{job['result_id']}").json()
 
     assert job["status"] == "succeeded"
-    assert job["progress"] == 4
-    assert job["total"] == 4
+    assert job["progress"] == 8
+    assert job["total"] == 8
     assert result["payload"]["independent_episode_count"] == 2
     assert next(
         row["ratios"]
@@ -164,3 +172,96 @@ def test_optimizer_reports_missing_trusted_cache_as_typed_404(tmp_path: Path) ->
     assert response.status_code == 404
     assert response.json()["schema_version"] == "1.0"
     assert "TQQQ" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("monotone", "expected_count"),
+    [(True, 1001), (False, 14641)],
+)
+def test_default_candidate_limit_allows_established_four_depth_grids(
+    monotone: bool,
+    expected_count: int,
+) -> None:
+    payload = _request()
+    payload["depths"] = ["0.10", "0.20", "0.30", "0.40"]
+    payload["ratio_search"] = {
+        "minimum_basis_points": 0,
+        "maximum_basis_points": 10_000,
+        "step_basis_points": 1_000,
+        "monotone": monotone,
+    }
+    request = OptimizationCreateRequest.model_validate(payload).to_domain(
+        prototype_symbol="QQQ",
+        target_leverage=3,
+    )
+
+    assert request.ratio_search.candidate_count(len(request.depths)) == expected_count
+
+
+def test_pathological_grid_is_typed_422_and_rejection_reason_is_persisted(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    payload = _request()
+    payload["depths"] = ["0.10", "0.20", "0.30", "0.40"]
+    payload["ratio_search"] = {
+        "minimum_basis_points": 0,
+        "maximum_basis_points": 10_000,
+        "step_basis_points": 1,
+        "monotone": False,
+    }
+    app = create_app(
+        Settings(
+            database_path=tmp_path / "drawdown.sqlite",
+            data_root=data_root,
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/optimizations", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["schema_version"] == "1.0"
+    rejection = app.state.job_store.latest_rejection()
+    assert rejection is not None
+    assert rejection.kind == "optimization"
+    assert "exceeds maximum 14641" in rejection.reason
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("worst_5_floor", float("inf")),
+        ("max_early_depletion_rate", -0.01),
+        ("max_early_depletion_rate", 1.01),
+        ("max_longest_trap_days", -1),
+    ],
+)
+def test_profile_constraints_reject_non_finite_or_out_of_range_values(
+    tmp_path: Path,
+    field: str,
+    value: float,
+) -> None:
+    payload = _request()
+    data_root = tmp_path / "data"
+    _seed(data_root)
+    profile = dict(payload["balanced"])
+    profile[field] = value
+    payload["balanced"] = profile
+    with TestClient(
+        create_app(
+            Settings(
+                database_path=tmp_path / "drawdown.sqlite",
+                data_root=data_root,
+            )
+        )
+    ) as client:
+        response = client.post(
+            "/api/v1/optimizations",
+            content=json.dumps(payload, allow_nan=True),
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["schema_version"] == "1.0"
+    assert isinstance(response.json()["detail"], list)

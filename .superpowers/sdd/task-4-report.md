@@ -408,3 +408,202 @@ Test additions/changes:
 ### Correction concerns
 
 None.
+
+---
+
+## Second review correction: atomic jobs, leases, real walk-forward, bounded grids,
+## and durable compatibility
+
+This section supersedes the restart, state-machine, walk-forward, grid-boundary,
+legacy-read, and custom-error details above.
+
+### Outcome
+
+- Status: DONE
+- Branch: `feature/ai-batch`
+- Merge/PR: intentionally not performed
+- Python: `C:\Users\10931\.drawdown-ledger\py311\Scripts\python.exe`
+- Live source: `PYTHONPATH=apps/api/src`
+
+### Cycle E: atomic terminal transitions and contradiction cleanup
+
+RED command:
+
+```powershell
+python -m pytest apps/api/tests/api/test_jobs.py `
+  -k 'atomic or reconciliation_removes' -q
+```
+
+Observed RED:
+
+```text
+3 failed, 1 passed, 7 deselected
+```
+
+Both barrier-started cancel races could finish as `cancelling`; the
+cancel-versus-complete race also retained a result. Reconciliation left a
+result/report attached to a non-succeeded job.
+
+GREEN:
+
+```text
+4 passed, 7 deselected
+```
+
+The store now acquires `BEGIN IMMEDIATE` before terminal decisions, uses
+status/cancellation predicates plus `rowcount`, rejects stale transitions, and
+deletes result/report contradictions for every non-succeeded terminal outcome.
+The complete transaction updates the job and inserts its result/report as one
+rollback-safe unit.
+
+A final state-machine RED test observed that cancelling an unclaimed queued job
+left it indefinitely `cancelling`; queued cancellation now becomes terminal
+`cancelled` in the same transaction. The final job-state focused result is
+`16 passed`.
+
+### Cycle F: persisted worker leases and multi-instance claiming
+
+RED command:
+
+```powershell
+python -m pytest apps/api/tests/api/test_jobs.py `
+  -k 'restart_recovers or live_running or two_app' -q
+```
+
+Observed RED:
+
+```text
+3 failed, 1 passed, 9 deselected
+TypeError: JobStore.start() got an unexpected keyword argument 'worker_id'
+assert call_count == 1  # observed 2
+```
+
+GREEN focused result:
+
+```text
+4 passed, 9 deselected
+```
+
+Schema version 3 adds persisted `lease_owner` and `lease_expires_at`. Every
+service has a unique owner, atomically claims only queued or expired work,
+renews its lease on real progress, and must still own the lease to update,
+complete, fail, or cancel from a worker. Reconciliation returns queued and
+expired jobs without resetting live running jobs. Added tests also prove a
+stale owner cannot publish after recovery and an intruder cannot heartbeat.
+
+### Cycle G: train/test expanding walk-forward evidence
+
+RED command:
+
+```powershell
+python -m pytest apps/api/tests/optimization/test_evaluator.py `
+  -k 'walk_forward_simulates or future_only or each_fold or progress_checkpoints' -q
+```
+
+Observed RED:
+
+```text
+4 failed, 3 deselected
+TypeError: WalkForwardSettings.__init__() got an unexpected keyword argument
+'minimum_train_independent_episodes'
+```
+
+GREEN:
+
+```text
+7 passed in 1.01s
+```
+
+Every candidate/fold now calls the simulator separately for the expanding
+training range and its future test range. Persisted fold evidence includes both
+date ranges, both XIRRs, independent train/test episode counts, training
+selection, and eligibility. Configured train and test episode minimums gate
+formal recommendations. Risk constraints and recommendations continue to use
+test/OOS metrics only.
+
+The recording regression observes four train plus four test simulator calls.
+A future-only target mutation changes fold-2 test XIRR while leaving its train
+XIRR and training selection unchanged. Progress for the two-candidate,
+two-fold fixture is now exactly 1 through 8 of 8.
+
+### Cycle H: lazy bounded candidate grids and persisted rejections
+
+Initial RED collection exposed the absent closed-form counter:
+
+```text
+ImportError: cannot import name 'count_ratio_grid'
+```
+
+GREEN focused result:
+
+```text
+15 passed in 1.67s
+```
+
+Candidate totals are computed in constant space using `math.comb` for monotone
+grids or exponentiation for unrestricted grids. Vectors are yielded lazily only
+after the request is persisted. The default 14,641-candidate limit admits both
+the established 1,001-vector monotone grid and 14,641-vector unrestricted grid.
+The unrestricted one-basis-point four-depth count is computed without
+enumeration as:
+
+```text
+10,004,000,600,040,001
+```
+
+It returns a versioned 422 before cache lookup or allocation. Schema version 4
+persists the rejected request and exact reason in `request_rejections`.
+
+### Cycle I: legacy payloads and versioned custom errors
+
+Focused GREEN commands and results:
+
+```powershell
+python -m pytest apps/api/tests/api/test_typed_results.py -q
+# 3 passed in 1.51s
+
+python -m pytest apps/api/tests/api/test_contract.py -q
+# 5 passed in 1.52s
+
+python -m pytest apps/api/tests/api/test_trusted_optimizer.py `
+  -k profile_constraints -q
+# 4 passed, 7 deselected
+```
+
+`ResultResponse.payload` is now the explicit union of
+`OptimizationResultPayload` and `LegacyOptimizationPayload`; report content is
+the corresponding current/legacy union. Legacy wrappers preserve the stored
+schema version and the exact database JSON text, including when the JSON value
+itself is a string. Migration-style fixtures prove both list and detail routes
+remain readable.
+
+All API models reject NaN/Infinity. Profile floors must be finite, depletion
+limits are 0 through 1, and trap-day limits are non-negative in both API and
+domain validation. Validation issues have an explicit schema with `type`,
+`loc`, `msg`, and `input_json`; custom 404, 409, and 422 responses advertise
+the versioned `ErrorResponse` model in OpenAPI.
+
+### Final second-review verification
+
+Fresh commands:
+
+```powershell
+python -m pytest -q
+python -m ruff check .
+python -m mypy apps/api/src
+git diff --check
+```
+
+Results:
+
+```text
+144 passed in 7.44s
+All checks passed!
+Success: no issues found in 35 source files
+```
+
+The output contained no warnings.
+
+### Second-review concerns
+
+None.

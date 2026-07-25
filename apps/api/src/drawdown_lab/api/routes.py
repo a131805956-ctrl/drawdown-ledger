@@ -11,6 +11,7 @@ from drawdown_lab.api.schemas import (
     DataHealthResponse,
     DataUpdateRequest,
     DataUpdateResponse,
+    ErrorResponse,
     EvidenceAnalyzeRequest,
     EvidenceAnalyzeResponse,
     HorizonStatisticsResponse,
@@ -52,7 +53,14 @@ def create_router(
     data_catalog: DataCatalog,
     update_coordinator: UpdateCoordinator | None,
 ) -> APIRouter:
-    router = APIRouter(prefix="/api/v1")
+    router = APIRouter(
+        prefix="/api/v1",
+        responses={
+            404: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+        },
+    )
 
     def trusted_frames(
         family_id: str,
@@ -185,11 +193,19 @@ def create_router(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InstrumentFamilyMismatchError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        try:
+            domain_request = request.to_domain(
+                prototype_symbol=target.prototype_symbol,
+                target_leverage=target.leverage,
+            )
+        except ValueError as error:
+            job_store.record_rejection(
+                kind="optimization",
+                request_payload=request.model_dump(mode="json"),
+                reason=str(error),
+            )
+            raise HTTPException(status_code=422, detail=str(error)) from error
         trusted_frames(request.family_id, request.target_symbol)
-        domain_request = request.to_domain(
-            prototype_symbol=target.prototype_symbol,
-            target_leverage=target.leverage,
-        )
         job = job_service.submit(domain_request)
         return OptimizationAcceptedResponse(job_id=job.id, status="queued")
 

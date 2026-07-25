@@ -7,6 +7,7 @@ from decimal import Decimal
 import pandas as pd
 import pytest
 from drawdown_lab.data.models import MarketFrame
+from drawdown_lab.optimization import evaluator as evaluator_module
 from drawdown_lab.optimization.evaluator import (
     HistoricalOptimizationRequest,
     OptimizationCancelled,
@@ -140,7 +141,12 @@ def _request() -> HistoricalOptimizationRequest:
             step_basis_points=10_000,
             monotone=True,
         ),
-        walk_forward=WalkForwardSettings(n_splits=2, test_size_sessions=8),
+        walk_forward=WalkForwardSettings(
+            n_splits=2,
+            test_size_sessions=8,
+            minimum_train_independent_episodes=0,
+            minimum_test_independent_episodes=1,
+        ),
         scoring=OptimizationRequest(
             minimum_independent_episodes=1,
             isolated_peak_penalty=0.0,
@@ -181,7 +187,16 @@ def test_progress_checkpoints_follow_actual_candidate_fold_simulations() -> None
         on_batch=lambda completed, total: checkpoints.append((completed, total)) or True,
     )
 
-    assert checkpoints == [(1, 4), (2, 4), (3, 4), (4, 4)]
+    assert checkpoints == [
+        (1, 8),
+        (2, 8),
+        (3, 8),
+        (4, 8),
+        (5, 8),
+        (6, 8),
+        (7, 8),
+        (8, 8),
+    ]
 
 
 def test_cancellation_stops_at_real_evaluation_batch_without_result() -> None:
@@ -225,3 +240,89 @@ def test_synthetic_stress_is_evaluated_separately_without_changing_ranking() -> 
     assert stressed.synthetic_stress.requested is True
     assert stressed.synthetic_stress.evaluated_candidates == 2
     assert all(row.synthetic_stress_pass is not None for row in stressed.candidates)
+
+
+def test_walk_forward_simulates_and_persists_both_train_and_test_ranges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, date, date]] = []
+    real_simulate = evaluator_module.simulate_strategy
+
+    def recording_simulate(*args: object, **kwargs: object) -> object:
+        config = args[0]
+        calls.append((config.name, config.start, config.end))
+        return real_simulate(*args, **kwargs)
+
+    monkeypatch.setattr(evaluator_module, "simulate_strategy", recording_simulate)
+
+    result = optimize_market_history(
+        _request(),
+        _frame(PROTOTYPE_PRICES),
+        _frame(RISING_TARGET),
+    )
+
+    assert len(calls) == 8
+    assert sum("-train" in name for name, _, _ in calls) == 4
+    assert sum("-test" in name for name, _, _ in calls) == 4
+    folds = result.candidates[0].fold_evaluations
+    assert [
+        (
+            fold.train_independent_episode_count,
+            fold.test_independent_episode_count,
+        )
+        for fold in folds
+    ] == [
+        (0, 1),
+        (1, 1),
+    ]
+    assert all(fold.train_end < fold.test_start for fold in folds)
+    assert all(fold.train_start <= fold.train_end for fold in folds)
+    assert all(fold.test_start <= fold.test_end for fold in folds)
+
+
+def test_future_only_changes_oos_but_not_prior_training_selection() -> None:
+    request = _request()
+    prototype = _frame(PROTOTYPE_PRICES)
+    original = optimize_market_history(request, prototype, _frame(RISING_TARGET))
+    future_changed_prices = (*RISING_TARGET[:16], *FALLING_TARGET[16:])
+    future_changed = optimize_market_history(
+        request,
+        prototype,
+        _frame(future_changed_prices),
+    )
+
+    for original_candidate, changed_candidate in zip(
+        original.candidates,
+        future_changed.candidates,
+        strict=True,
+    ):
+        original_fold = original_candidate.fold_evaluations[1]
+        changed_fold = changed_candidate.fold_evaluations[1]
+        assert original_fold.train_xirr == changed_fold.train_xirr
+        assert original_fold.training_selected == changed_fold.training_selected
+    assert (
+        original.candidates[1].fold_evaluations[1].test_xirr
+        != future_changed.candidates[1].fold_evaluations[1].test_xirr
+    )
+
+
+def test_each_fold_must_meet_configured_train_and_test_episode_minimums() -> None:
+    request = replace(
+        _request(),
+        walk_forward=WalkForwardSettings(
+            n_splits=2,
+            test_size_sessions=8,
+            minimum_train_independent_episodes=1,
+            minimum_test_independent_episodes=1,
+        ),
+    )
+
+    result = optimize_market_history(
+        request,
+        _frame(PROTOTYPE_PRICES),
+        _frame(RISING_TARGET),
+    )
+
+    assert result.mode == "exploration_only"
+    assert result.recommendations == ()
+    assert all(candidate.walk_forward_eligible is False for candidate in result.candidates)

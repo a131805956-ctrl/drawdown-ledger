@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
@@ -19,7 +19,7 @@ from drawdown_lab.analysis.strategy import (
 )
 from drawdown_lab.data.models import MarketFrame, validate_market_frame
 from drawdown_lab.domain.money import as_decimal, quantize_money
-from drawdown_lab.optimization.grid import generate_ratio_grid
+from drawdown_lab.optimization.grid import count_ratio_grid, generate_ratio_grid
 from drawdown_lab.optimization.scoring import (
     AnalysisFrames,
     CandidateScore,
@@ -28,6 +28,7 @@ from drawdown_lab.optimization.scoring import (
     OptimizationResult,
     SyntheticStress,
     SyntheticStressSummary,
+    WalkForwardFoldEvaluation,
     optimize,
 )
 from drawdown_lab.optimization.walk_forward import expanding_window_splits
@@ -100,15 +101,22 @@ class RatioSearch:
     step_basis_points: int = 1_000
     monotone: bool = True
 
-    def vectors(self, levels: int) -> tuple[tuple[int, ...], ...]:
-        return tuple(
-            generate_ratio_grid(
-                levels=levels,
-                minimum_basis_points=self.minimum_basis_points,
-                maximum_basis_points=self.maximum_basis_points,
-                step_basis_points=self.step_basis_points,
-                monotone=self.monotone,
-            )
+    def candidate_count(self, levels: int) -> int:
+        return count_ratio_grid(
+            levels=levels,
+            minimum_basis_points=self.minimum_basis_points,
+            maximum_basis_points=self.maximum_basis_points,
+            step_basis_points=self.step_basis_points,
+            monotone=self.monotone,
+        )
+
+    def iter_vectors(self, levels: int) -> Iterator[tuple[int, ...]]:
+        return generate_ratio_grid(
+            levels=levels,
+            minimum_basis_points=self.minimum_basis_points,
+            maximum_basis_points=self.maximum_basis_points,
+            step_basis_points=self.step_basis_points,
+            monotone=self.monotone,
         )
 
 
@@ -117,6 +125,8 @@ class WalkForwardSettings:
     n_splits: int = 3
     minimum_train_sessions: int | None = None
     test_size_sessions: int | None = None
+    minimum_train_independent_episodes: int = 1
+    minimum_test_independent_episodes: int = 1
 
     def __post_init__(self) -> None:
         if self.n_splits <= 0:
@@ -125,6 +135,11 @@ class WalkForwardSettings:
             raise ValueError("Minimum train sessions must be positive")
         if self.test_size_sessions is not None and self.test_size_sessions <= 0:
             raise ValueError("Test sessions must be positive")
+        if (
+            self.minimum_train_independent_episodes < 0
+            or self.minimum_test_independent_episodes < 0
+        ):
+            raise ValueError("Walk-forward episode minimums cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +170,8 @@ class HistoricalOptimizationRequest:
     walk_forward: WalkForwardSettings
     scoring: OptimizationRequest
     synthetic_stress: SyntheticStressSettings = SyntheticStressSettings()
+    max_depth_levels: int = 8
+    max_candidates: int = 14_641
 
     def __post_init__(self) -> None:
         normalized_depths = tuple(sorted(as_decimal(depth) for depth in self.depths))
@@ -169,7 +186,19 @@ class HistoricalOptimizationRequest:
             or any(depth <= 0 or depth > 1 for depth in normalized_depths)
         ):
             raise ValueError("Depths must be unique positive ratios no greater than one")
-        self.ratio_search.vectors(len(normalized_depths))
+        if self.max_depth_levels <= 0 or len(normalized_depths) > self.max_depth_levels:
+            raise ValueError(
+                f"Depth count {len(normalized_depths)} exceeds maximum "
+                f"{self.max_depth_levels}"
+            )
+        if self.max_candidates <= 0:
+            raise ValueError("Maximum candidate count must be positive")
+        candidate_count = self.ratio_search.candidate_count(len(normalized_depths))
+        if candidate_count > self.max_candidates:
+            raise ValueError(
+                f"Candidate count {candidate_count} exceeds maximum "
+                f"{self.max_candidates}"
+            )
 
 
 def _profile_payload(profile: object) -> dict[str, object]:
@@ -192,6 +221,8 @@ def historical_request_to_payload(
         "prototype_symbol": request.prototype_symbol,
         "target_symbol": request.target_symbol,
         "target_leverage": request.target_leverage,
+        "max_depth_levels": request.max_depth_levels,
+        "max_candidates": request.max_candidates,
         "strategy": {
             "start": strategy.start.isoformat(),
             "end": strategy.end.isoformat(),
@@ -217,6 +248,12 @@ def historical_request_to_payload(
             "n_splits": request.walk_forward.n_splits,
             "minimum_train_sessions": request.walk_forward.minimum_train_sessions,
             "test_size_sessions": request.walk_forward.test_size_sessions,
+            "minimum_train_independent_episodes": (
+                request.walk_forward.minimum_train_independent_episodes
+            ),
+            "minimum_test_independent_episodes": (
+                request.walk_forward.minimum_test_independent_episodes
+            ),
         },
         "scoring": {
             "minimum_independent_episodes": request.scoring.minimum_independent_episodes,
@@ -261,6 +298,8 @@ def historical_request_from_payload(
         prototype_symbol=str(payload["prototype_symbol"]),
         target_symbol=str(payload["target_symbol"]),
         target_leverage=int(payload["target_leverage"]),
+        max_depth_levels=int(payload.get("max_depth_levels", 8)),
+        max_candidates=int(payload.get("max_candidates", 14_641)),
         strategy=StrategyTemplate(
             start=date.fromisoformat(str(strategy["start"])),
             end=date.fromisoformat(str(strategy["end"])),
@@ -295,6 +334,12 @@ def historical_request_from_payload(
                 int(walk_forward["test_size_sessions"])
                 if walk_forward["test_size_sessions"] is not None
                 else None
+            ),
+            minimum_train_independent_episodes=int(
+                walk_forward.get("minimum_train_independent_episodes", 1)
+            ),
+            minimum_test_independent_episodes=int(
+                walk_forward.get("minimum_test_independent_episodes", 1)
             ),
         ),
         scoring=OptimizationRequest(
@@ -438,7 +483,7 @@ def optimize_market_history(
         min_train_size=request.walk_forward.minimum_train_sessions,
         test_size=request.walk_forward.test_size_sessions,
     )
-    vectors = request.ratio_search.vectors(len(request.depths))
+    vector_count = request.ratio_search.candidate_count(len(request.depths))
     synthetic_frame = (
         _synthetic_market_frame(
             prototype,
@@ -448,39 +493,104 @@ def optimize_market_history(
         if request.synthetic_stress.enabled
         else None
     )
-    total = len(vectors) * len(splits) + (
-        len(vectors) if synthetic_frame is not None else 0
+    total = vector_count * len(splits) * 2 + (
+        vector_count if synthetic_frame is not None else 0
     )
     completed = 0
     actual_candidates: list[CandidateScore] = []
     synthetic_rows: list[SyntheticStress] = []
+    episode_frame = MarketFrame(
+        prototype.data.loc[
+            pd.Timestamp(request.strategy.start) : pd.Timestamp(request.strategy.end)
+        ].copy()
+    )
+    episodes = classify_episodes(episode_frame, (float(min(request.depths)),))
 
-    for ratios in vectors:
+    def episode_count(start: date, end: date) -> int:
+        return sum(start <= episode.signal_date <= end for episode in episodes)
+
+    for ratios in request.ratio_search.iter_vectors(len(request.depths)):
         fold_xirr: list[float] = []
         fold_worst_tail: list[float] = []
         fold_depletion: list[float] = []
         fold_trap_days: list[int] = []
+        fold_evaluations: list[WalkForwardFoldEvaluation] = []
+        walk_forward_eligible = True
         for split_number, split in enumerate(splits, start=1):
-            start = dates[min(split.test_indices)]
-            end = dates[max(split.test_indices)]
-            result = simulate_strategy(
+            train_start = dates[min(split.train_indices)]
+            train_end = dates[max(split.train_indices)]
+            test_start = dates[min(split.test_indices)]
+            test_end = dates[max(split.test_indices)]
+            train_episode_count = episode_count(train_start, train_end)
+            test_episode_count = episode_count(test_start, test_end)
+            walk_forward_eligible = walk_forward_eligible and (
+                train_episode_count
+                >= request.walk_forward.minimum_train_independent_episodes
+                and test_episode_count
+                >= request.walk_forward.minimum_test_independent_episodes
+            )
+            train_result = simulate_strategy(
                 _strategy_config(
                     request,
                     ratios,
-                    start=start,
-                    end=end,
-                    name=f"candidate-{ratios}-fold-{split_number}",
+                    start=train_start,
+                    end=train_end,
+                    name=f"candidate-{ratios}-fold-{split_number}-train",
                 ),
                 prototype,
                 traded,
             )
-            if result.metrics is None:
+            if train_result.metrics is None:
                 raise RuntimeError("Strategy simulation did not produce performance metrics")
-            metrics = result.metrics
-            fold_xirr.append(metrics.xirr if metrics.xirr is not None else metrics.twr)
-            fold_worst_tail.append(metrics.expected_shortfall_5)
-            fold_depletion.append(1.0 if metrics.cash_depletion_date is not None else 0.0)
-            fold_trap_days.append(metrics.longest_underwater_days)
+            train_metrics = train_result.metrics
+            train_xirr = (
+                train_metrics.xirr
+                if train_metrics.xirr is not None
+                else train_metrics.twr
+            )
+            completed += 1
+            _checkpoint(
+                completed,
+                total,
+                batch_size=evaluation_batch_size,
+                on_batch=on_batch,
+            )
+            test_result = simulate_strategy(
+                _strategy_config(
+                    request,
+                    ratios,
+                    start=test_start,
+                    end=test_end,
+                    name=f"candidate-{ratios}-fold-{split_number}-test",
+                ),
+                prototype,
+                traded,
+            )
+            if test_result.metrics is None:
+                raise RuntimeError("Strategy simulation did not produce performance metrics")
+            test_metrics = test_result.metrics
+            test_xirr = (
+                test_metrics.xirr if test_metrics.xirr is not None else test_metrics.twr
+            )
+            fold_xirr.append(test_xirr)
+            fold_worst_tail.append(test_metrics.expected_shortfall_5)
+            fold_depletion.append(
+                1.0 if test_metrics.cash_depletion_date is not None else 0.0
+            )
+            fold_trap_days.append(test_metrics.longest_underwater_days)
+            fold_evaluations.append(
+                WalkForwardFoldEvaluation(
+                    fold_number=split_number,
+                    train_start=train_start,
+                    train_end=train_end,
+                    test_start=test_start,
+                    test_end=test_end,
+                    train_independent_episode_count=train_episode_count,
+                    test_independent_episode_count=test_episode_count,
+                    train_xirr=train_xirr,
+                    test_xirr=test_xirr,
+                )
+            )
             completed += 1
             _checkpoint(
                 completed,
@@ -495,6 +605,8 @@ def optimize_market_history(
                 worst_5_return=min(fold_worst_tail),
                 early_depletion_rate=sum(fold_depletion) / len(fold_depletion),
                 longest_trap_days=max(fold_trap_days),
+                fold_evaluations=tuple(fold_evaluations),
+                walk_forward_eligible=walk_forward_eligible,
             )
         )
 
@@ -532,14 +644,40 @@ def optimize_market_history(
                 on_batch=on_batch,
             )
 
-    episode_frame = MarketFrame(
-        prototype.data.loc[
-            pd.Timestamp(request.strategy.start) : pd.Timestamp(request.strategy.end)
-        ].copy()
-    )
-    independent_episode_count = len(
-        classify_episodes(episode_frame, (float(min(request.depths)),))
-    )
+    for fold_index in range(len(splits)):
+        eligible = tuple(
+            candidate
+            for candidate in actual_candidates
+            if candidate.walk_forward_eligible
+        )
+        if not eligible:
+            break
+        selected = max(
+            eligible,
+            key=lambda candidate: (
+                candidate.fold_evaluations[fold_index].train_xirr,
+                tuple(-ratio for ratio in candidate.ratios),
+            ),
+        )
+        actual_candidates = [
+            replace(
+                candidate,
+                fold_evaluations=tuple(
+                    replace(
+                        fold,
+                        training_selected=(
+                            fold_index == index and candidate.ratios == selected.ratios
+                        ),
+                    )
+                    if fold_index == index
+                    else fold
+                    for index, fold in enumerate(candidate.fold_evaluations)
+                ),
+            )
+            for candidate in actual_candidates
+        ]
+
+    independent_episode_count = len(episodes)
     ranked = optimize(
         request.scoring,
         AnalysisFrames(

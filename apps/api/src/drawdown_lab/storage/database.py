@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 
 class Database:
@@ -47,6 +47,8 @@ class Database:
                     ),
                     result_id TEXT,
                     error TEXT,
+                    lease_owner TEXT,
+                    lease_expires_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     completed_at TEXT
@@ -73,12 +75,23 @@ class Database:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS request_rejections (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    request_json TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS jobs_created_at_idx ON jobs(created_at, id);
                 CREATE INDEX IF NOT EXISTS results_created_at_idx ON results(created_at, id);
                 CREATE INDEX IF NOT EXISTS reports_created_at_idx ON reports(created_at, id);
+                CREATE INDEX IF NOT EXISTS request_rejections_created_at_idx
+                    ON request_rejections(created_at, id);
                 """
             )
             self._migrate_completed_status(connection)
+            self._migrate_job_leases(connection)
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS jobs_created_at_idx ON jobs(created_at, id)"
             )
@@ -120,6 +133,8 @@ class Database:
                 ),
                 result_id TEXT,
                 error TEXT,
+                lease_owner TEXT,
+                lease_expires_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 completed_at TEXT
@@ -127,6 +142,7 @@ class Database:
             INSERT INTO jobs_new (
                 id, kind, status, request_json, progress, total,
                 cancellation_requested, result_id, error,
+                lease_owner, lease_expires_at,
                 created_at, updated_at, completed_at
             )
             SELECT
@@ -139,6 +155,8 @@ class Database:
                 cancellation_requested,
                 result_id,
                 error,
+                NULL,
+                NULL,
                 created_at,
                 updated_at,
                 completed_at
@@ -149,3 +167,14 @@ class Database:
             """
         )
         connection.execute("PRAGMA foreign_keys = ON")
+
+    @staticmethod
+    def _migrate_job_leases(connection: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "lease_owner" not in columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN lease_owner TEXT")
+        if "lease_expires_at" not in columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN lease_expires_at TEXT")

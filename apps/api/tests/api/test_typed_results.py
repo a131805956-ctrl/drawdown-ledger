@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
 from drawdown_lab.api.app import Settings, create_app
+from drawdown_lab.storage.database import Database
 from fastapi.testclient import TestClient
 
 from apps.api.tests.api.test_trusted_optimizer import _request, _seed
@@ -29,12 +31,22 @@ def test_openapi_advertises_explicit_formal_result_and_report_models(
 
     result_schema = schema["components"]["schemas"]["ResultResponse"]
     report_schema = schema["components"]["schemas"]["ReportResponse"]
-    assert result_schema["properties"]["payload"]["$ref"].endswith(
-        "/OptimizationResultPayload"
-    )
-    assert report_schema["properties"]["content"]["$ref"].endswith(
-        "/ReportContentResponse"
-    )
+    result_payload_refs = {
+        item["$ref"].rsplit("/", 1)[-1]
+        for item in result_schema["properties"]["payload"]["anyOf"]
+    }
+    report_content_refs = {
+        item["$ref"].rsplit("/", 1)[-1]
+        for item in report_schema["properties"]["content"]["anyOf"]
+    }
+    assert result_payload_refs == {
+        "OptimizationResultPayload",
+        "LegacyOptimizationPayload",
+    }
+    assert report_content_refs == {
+        "ReportContentResponse",
+        "LegacyReportContent",
+    }
     candidate = schema["components"]["schemas"]["OptimizationCandidateResponse"]
     assert {
         "ratios",
@@ -87,3 +99,72 @@ def test_persisted_formal_result_has_typed_provenance_and_synthetic_summary(
     assert len(payload["candidates"][0]["fold_oos_xirr"]) == 2
     assert report["content"]["status"] == "not_yet_exported"
     assert report["content"]["optimization"]["provenance"] == payload["provenance"]
+
+
+def test_legacy_json_string_result_and_report_rows_remain_listable_and_readable(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "drawdown.sqlite"
+    database = Database(database_path)
+    timestamp = "2020-01-01T00:00:00+00:00"
+    legacy_result_json = json.dumps("legacy-result-string")
+    legacy_report_json = json.dumps("legacy-report-string")
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO jobs (
+                id, kind, status, request_json, progress, total,
+                cancellation_requested, result_id, created_at, updated_at,
+                completed_at
+            ) VALUES (
+                'legacy-job', 'optimization', 'succeeded', '{}', 1, 1,
+                0, 'legacy-result', ?, ?, ?
+            )
+            """,
+            (timestamp, timestamp, timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO results (
+                id, job_id, kind, schema_version, payload_json, created_at
+            ) VALUES (
+                'legacy-result', 'legacy-job', 'optimization', '0.9', ?, ?
+            )
+            """,
+            (legacy_result_json, timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO reports (
+                id, result_id, title, export_status,
+                schema_version, content_json, created_at
+            ) VALUES (
+                'legacy-report', 'legacy-result', 'Legacy',
+                'not_yet_exported', '0.9', ?, ?
+            )
+            """,
+            (legacy_report_json, timestamp),
+        )
+
+    with TestClient(create_app(Settings(database_path=database_path))) as client:
+        result_list = client.get("/api/v1/results")
+        result_detail = client.get("/api/v1/results/legacy-result")
+        report_list = client.get("/api/v1/reports")
+        report_detail = client.get("/api/v1/reports/legacy-report")
+
+    assert result_list.status_code == 200
+    assert result_detail.status_code == 200
+    assert report_list.status_code == 200
+    assert report_detail.status_code == 200
+    assert result_detail.json()["payload"] == {
+        "payload_type": "legacy",
+        "stored_schema_version": "0.9",
+        "raw_json": legacy_result_json,
+    }
+    assert result_list.json()["results"][0]["payload"] == result_detail.json()["payload"]
+    assert report_detail.json()["content"] == {
+        "content_type": "legacy",
+        "stored_schema_version": "0.9",
+        "raw_json": legacy_report_json,
+    }
+    assert report_list.json()["reports"][0]["content"] == report_detail.json()["content"]
