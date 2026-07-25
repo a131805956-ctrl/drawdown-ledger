@@ -41,3 +41,34 @@ def generate_monotone_grid(
     step: int = 10,
 ) -> Iterator[tuple[int, ...]]:
     yield from generate_grid(levels=levels, step=step, monotone=True)
+
+
+def generate_ratio_grid(
+    *,
+    levels: int,
+    minimum_basis_points: int,
+    maximum_basis_points: int,
+    step_basis_points: int,
+    monotone: bool,
+) -> Iterator[tuple[int, ...]]:
+    """Yield a bounded basis-point search space without caller-supplied candidates."""
+
+    if levels <= 0:
+        raise ValueError("Levels must be positive")
+    if not 0 <= minimum_basis_points <= maximum_basis_points <= MAX_RATIO_BASIS_POINTS:
+        raise ValueError("Ratio bounds must be ordered basis points from 0 through 10000")
+    if step_basis_points <= 0:
+        raise ValueError("Ratio step must be positive")
+    if (maximum_basis_points - minimum_basis_points) % step_basis_points:
+        raise ValueError("Ratio range must be exactly divisible by the basis-point step")
+    values = range(
+        minimum_basis_points,
+        maximum_basis_points + 1,
+        step_basis_points,
+    )
+    vectors = (
+        combinations_with_replacement(values, levels)
+        if monotone
+        else product(values, repeat=levels)
+    )
+    yield from vectors

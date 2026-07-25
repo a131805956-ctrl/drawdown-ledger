@@ -29,8 +29,14 @@ from drawdown_lab.api.schemas import (
     StrategyBacktestResponse,
 )
 from drawdown_lab.data.catalog import DataCatalog
+from drawdown_lab.data.models import MarketFrame
 from drawdown_lab.data.update import UpdateCoordinator
-from drawdown_lab.domain.instruments import INSTRUMENT_FAMILIES
+from drawdown_lab.domain.instruments import (
+    INSTRUMENT_FAMILIES,
+    InstrumentFamilyMismatchError,
+    InstrumentFamilyNotFoundError,
+    resolve_family_instrument,
+)
 from drawdown_lab.storage.jobs import (
     InvalidJobTransitionError,
     JobNotFoundError,
@@ -47,6 +53,30 @@ def create_router(
     update_coordinator: UpdateCoordinator | None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
+
+    def trusted_frames(
+        family_id: str,
+        target_symbol: str,
+    ) -> tuple[MarketFrame, MarketFrame]:
+        try:
+            _, target = resolve_family_instrument(family_id, target_symbol)
+        except InstrumentFamilyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InstrumentFamilyMismatchError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        prototype = data_catalog.read(target.prototype_symbol)
+        traded = data_catalog.read(target.symbol)
+        if prototype is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Trusted cache is missing {target.prototype_symbol}",
+            )
+        if traded is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Trusted cache is missing {target.symbol}",
+            )
+        return prototype, traded
 
     @router.get("/instruments", response_model=InstrumentListResponse)
     def instruments() -> InstrumentListResponse:
@@ -97,8 +127,11 @@ def create_router(
 
     @router.post("/evidence/analyze", response_model=EvidenceAnalyzeResponse)
     def evidence_analyze(request: EvidenceAnalyzeRequest) -> EvidenceAnalyzeResponse:
-        domain_request, prototype, traded = request.to_domain()
-        report = analyze_evidence(domain_request, prototype, traded)
+        prototype, traded = trusted_frames(request.family_id, request.target_symbol)
+        try:
+            report = analyze_evidence(request.to_domain(), prototype, traded)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return EvidenceAnalyzeResponse(
             n_day=report.n_day,
             n_episode=report.n_episode,
@@ -115,8 +148,11 @@ def create_router(
 
     @router.post("/strategies/backtest", response_model=StrategyBacktestResponse)
     def strategy_backtest(request: StrategyBacktestRequest) -> StrategyBacktestResponse:
-        config, prototype, traded = request.to_domain()
-        result = simulate_strategy(config, prototype, traded)
+        prototype, traded = trusted_frames(request.family_id, request.target_symbol)
+        try:
+            result = simulate_strategy(request.to_domain(), prototype, traded)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         metrics = (
             PerformanceResponse(**asdict(result.metrics))
             if result.metrics is not None
@@ -140,8 +176,21 @@ def create_router(
     def create_optimization(
         request: OptimizationCreateRequest,
     ) -> OptimizationAcceptedResponse:
-        domain_request, frames = request.to_domain()
-        job = job_service.submit(domain_request, frames)
+        try:
+            _, target = resolve_family_instrument(
+                request.family_id,
+                request.target_symbol,
+            )
+        except InstrumentFamilyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InstrumentFamilyMismatchError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        trusted_frames(request.family_id, request.target_symbol)
+        domain_request = request.to_domain(
+            prototype_symbol=target.prototype_symbol,
+            target_leverage=target.leverage,
+        )
+        job = job_service.submit(domain_request)
         return OptimizationAcceptedResponse(job_id=job.id, status="queued")
 
     @router.get("/jobs/{job_id}", response_model=JobResponse)

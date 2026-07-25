@@ -5,7 +5,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from drawdown_lab.api.routes import create_router
 from drawdown_lab.data.catalog import DataCatalog
@@ -20,24 +22,24 @@ class Settings:
     data_root: Path | None = None
     max_job_workers: int = 1
     job_batch_size: int = 25
-    job_batch_delay_seconds: float = 0.0
     update_coordinator: UpdateCoordinator | None = None
 
 
 def create_app(settings: Settings) -> FastAPI:
     database = Database(settings.database_path)
     job_store = JobStore(database)
-    job_service = JobService(
-        job_store,
-        max_workers=settings.max_job_workers,
-        batch_size=settings.job_batch_size,
-        batch_delay_seconds=settings.job_batch_delay_seconds,
-    )
     data_root = settings.data_root or settings.database_path.parent / "data"
     data_catalog = DataCatalog(data_root)
+    job_service = JobService(
+        job_store,
+        data_catalog,
+        max_workers=settings.max_job_workers,
+        batch_size=settings.job_batch_size,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        job_service.reconcile()
         yield
         job_service.shutdown()
 
@@ -52,6 +54,31 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.job_store = job_store
     app.state.job_service = job_service
     app.state.data_catalog = data_catalog
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        _: object,
+        error: RequestValidationError,
+    ) -> JSONResponse:
+        details = tuple(
+            {key: value for key, value in item.items() if key != "ctx"}
+            for item in error.errors()
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "schema_version": "1.0",
+                "detail": details,
+            },
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_error_handler(_: object, error: HTTPException) -> JSONResponse:
+        return JSONResponse(
+            status_code=error.status_code,
+            content={"schema_version": "1.0", "detail": error.detail},
+            headers=error.headers,
+        )
     app.include_router(
         create_router(
             job_store=job_store,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import date
 from math import fsum, isfinite
 from statistics import median
 from typing import Literal
@@ -109,6 +110,7 @@ class OptimizationRequest:
 @dataclass(frozen=True, slots=True)
 class ScoredCandidate:
     ratios: tuple[int, ...]
+    fold_oos_xirr: tuple[float, ...]
     oos_xirr: float
     stability_score: float
     stability_adjusted_xirr: float
@@ -130,11 +132,34 @@ class Recommendation:
 
 
 @dataclass(frozen=True, slots=True)
+class OptimizationProvenance:
+    family_id: str
+    prototype_symbol: str
+    target_symbol: str
+    strategy_start: date
+    strategy_end: date
+    walk_forward_splits: int
+    source_kind: Literal["actual"] = "actual"
+    ratio_unit: Literal["basis_points"] = "basis_points"
+
+
+@dataclass(frozen=True, slots=True)
+class SyntheticStressSummary:
+    requested: bool
+    evaluated_candidates: int
+    passed_candidates: int
+
+
+@dataclass(frozen=True, slots=True)
 class OptimizationResult:
     mode: OptimizationMode
     independent_episode_count: int
     candidates: tuple[ScoredCandidate, ...]
     recommendations: tuple[Recommendation, ...]
+    schema_version: Literal["1.0"] = "1.0"
+    exploration_only: bool = False
+    provenance: OptimizationProvenance | None = None
+    synthetic_stress: SyntheticStressSummary = SyntheticStressSummary(False, 0, 0)
 
 
 def _is_neighbor(
@@ -194,6 +219,7 @@ def _score_candidates(
         scored.append(
             ScoredCandidate(
                 ratios=candidate.ratios,
+                fold_oos_xirr=candidate.fold_oos_xirr,
                 oos_xirr=candidate.oos_xirr,
                 stability_score=neighbor_score,
                 stability_adjusted_xirr=(

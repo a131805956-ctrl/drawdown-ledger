@@ -2,24 +2,29 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from typing import Any, Literal, cast
+from typing import Annotated, Literal, Self, cast
 
-import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from drawdown_lab.analysis.evidence import EvidenceRequest
 from drawdown_lab.analysis.strategy import StrategyConfig, ThresholdTier
-from drawdown_lab.data.models import MarketFrame
+from drawdown_lab.optimization.evaluator import (
+    HistoricalOptimizationRequest,
+    RatioSearch,
+    StrategyTemplate,
+    SyntheticStressSettings,
+    WalkForwardSettings,
+)
 from drawdown_lab.optimization.scoring import (
-    AnalysisFrames,
-    CandidateScore,
     OptimizationRequest,
     ProfileConstraints,
-    SyntheticStress,
 )
 from drawdown_lab.storage.jobs import JobRecord, ReportRecord, ResultRecord
 
 SCHEMA_VERSION: Literal["1.0"] = "1.0"
+PositiveRatio = Annotated[Decimal, Field(gt=0, le=1)]
+NonNegativeDecimal = Annotated[Decimal, Field(ge=0)]
+UnitDecimal = Annotated[Decimal, Field(ge=0, le=1)]
 
 
 class ApiModel(BaseModel):
@@ -75,43 +80,22 @@ class MarketOverviewResponse(VersionedModel):
     formal_result_count: int
 
 
-class MarketBar(ApiModel):
-    date: date
-    raw_open: float
-    raw_high: float
-    raw_low: float
-    raw_close: float
-    price_open: float
-    price_high: float
-    price_low: float
-    price_close: float
-    adj_close: float
-    dividend_raw: float = 0.0
-    split_ratio: float = 1.0
-
-
-class MarketFramePayload(ApiModel):
-    bars: tuple[MarketBar, ...] = Field(min_length=1)
-
-    def to_domain(self) -> MarketFrame:
-        rows = [bar.model_dump() for bar in self.bars]
-        frame = pd.DataFrame(rows)
-        frame.index = pd.DatetimeIndex(frame.pop("date"))
-        return MarketFrame(frame)
-
-
 class EvidenceAnalyzeRequest(VersionedModel):
-    threshold: float
+    family_id: str = Field(min_length=1)
+    target_symbol: str = Field(min_length=1)
+    threshold: float = Field(gt=0.0, le=1.0)
     horizons: tuple[int, ...] = (21, 63, 126, 252, 756, 1260)
-    prototype: MarketFramePayload
-    traded: MarketFramePayload
 
-    def to_domain(self) -> tuple[EvidenceRequest, MarketFrame, MarketFrame]:
-        return (
-            EvidenceRequest(threshold=self.threshold, horizons=self.horizons),
-            self.prototype.to_domain(),
-            self.traded.to_domain(),
-        )
+    @model_validator(mode="after")
+    def validate_horizons(self) -> Self:
+        if not self.horizons or any(horizon <= 0 for horizon in self.horizons):
+            raise ValueError("Evidence horizons must be positive")
+        if len(set(self.horizons)) != len(self.horizons):
+            raise ValueError("Evidence horizons must be unique")
+        return self
+
+    def to_domain(self) -> EvidenceRequest:
+        return EvidenceRequest(threshold=self.threshold, horizons=self.horizons)
 
 
 class HorizonStatisticsResponse(ApiModel):
@@ -137,32 +121,65 @@ class EvidenceAnalyzeResponse(VersionedModel):
 
 
 class StrategyTierInput(ApiModel):
-    depth: Decimal
-    cash_fraction: Decimal
+    depth: PositiveRatio
+    cash_fraction: PositiveRatio
 
 
 class StrategyBacktestRequest(VersionedModel):
+    family_id: str = Field(min_length=1)
+    target_symbol: str = Field(min_length=1)
     start: date
-    end: date | None = None
-    initial_cash: Decimal
+    end: date
+    initial_cash: NonNegativeDecimal
+    initial_shares: NonNegativeDecimal = Decimal("0")
     tiers: tuple[StrategyTierInput, ...] = Field(min_length=1)
-    prototype: MarketFramePayload
-    traded: MarketFramePayload
+    monthly_contribution: NonNegativeDecimal = Decimal("0")
+    annual_contribution_growth: Decimal = Field(default=Decimal("0"), gt=-1)
+    contribution_day: int = Field(default=1, ge=1, le=31)
+    cash_interest_rate: NonNegativeDecimal = Decimal("0")
+    dividend_policy: Literal["cash", "reinvest"] = "cash"
+    fixed_fee: NonNegativeDecimal = Decimal("0")
+    fee_rate: UnitDecimal = Decimal("0")
+    slippage: UnitDecimal = Decimal("0")
     name: str = "cash-pool"
 
-    def to_domain(self) -> tuple[StrategyConfig, MarketFrame, MarketFrame]:
-        return (
-            StrategyConfig(
+    @model_validator(mode="after")
+    def validate_strategy(self) -> Self:
+        if self.end < self.start:
+            raise ValueError("End date cannot precede start date")
+        depths = tuple(tier.depth for tier in self.tiers)
+        if len(set(depths)) != len(depths):
+            raise ValueError("Tier depths must be unique")
+        return self
+
+    def to_domain(self) -> StrategyConfig:
+        from drawdown_lab.analysis.cashflows import ContributionSchedule
+
+        contributions = (
+            ContributionSchedule(
+                monthly=self.monthly_contribution,
+                annual_growth=self.annual_contribution_growth,
                 start=self.start,
-                end=self.end,
-                initial_cash=self.initial_cash,
-                tiers=tuple(
-                    ThresholdTier(tier.depth, tier.cash_fraction) for tier in self.tiers
-                ),
-                name=self.name,
+                contribution_day=self.contribution_day,
+            )
+            if self.monthly_contribution > 0
+            else None
+        )
+        return StrategyConfig(
+            start=self.start,
+            end=self.end,
+            initial_cash=self.initial_cash,
+            initial_shares=self.initial_shares,
+            tiers=tuple(
+                ThresholdTier(tier.depth, tier.cash_fraction) for tier in self.tiers
             ),
-            self.prototype.to_domain(),
-            self.traded.to_domain(),
+            contributions=contributions,
+            cash_interest_rate=self.cash_interest_rate,
+            dividend_policy=self.dividend_policy,
+            fixed_fee=self.fixed_fee,
+            fee_rate=self.fee_rate,
+            slippage=self.slippage,
+            name=self.name,
         )
 
 
@@ -199,35 +216,104 @@ class ProfileConstraintsInput(ApiModel):
         )
 
 
-class OptimizationCandidateInput(ApiModel):
-    ratios: tuple[int, ...] = Field(min_length=1)
-    fold_oos_xirr: tuple[float, ...] = Field(min_length=1)
-    worst_5_return: float
-    early_depletion_rate: float
-    longest_trap_days: int
+class StrategyTemplateInput(ApiModel):
+    start: date
+    end: date
+    initial_cash: NonNegativeDecimal
+    initial_shares: NonNegativeDecimal = Decimal("0")
+    monthly_contribution: NonNegativeDecimal = Decimal("0")
+    annual_contribution_growth: Decimal = Field(default=Decimal("0"), gt=-1)
+    contribution_day: int = Field(default=1, ge=1, le=31)
+    cash_interest_rate: NonNegativeDecimal = Decimal("0")
+    dividend_policy: Literal["cash", "reinvest"] = "cash"
+    fixed_fee: NonNegativeDecimal = Decimal("0")
+    fee_rate: UnitDecimal = Decimal("0")
+    slippage: UnitDecimal = Decimal("0")
 
-    def to_domain(self) -> CandidateScore:
-        return CandidateScore(
-            ratios=self.ratios,
-            fold_oos_xirr=self.fold_oos_xirr,
-            worst_5_return=self.worst_5_return,
-            early_depletion_rate=self.early_depletion_rate,
-            longest_trap_days=self.longest_trap_days,
+    @model_validator(mode="after")
+    def validate_dates(self) -> Self:
+        if self.end < self.start:
+            raise ValueError("End date cannot precede start date")
+        return self
+
+    def to_domain(self) -> StrategyTemplate:
+        return StrategyTemplate(
+            start=self.start,
+            end=self.end,
+            initial_cash=self.initial_cash,
+            initial_shares=self.initial_shares,
+            monthly_contribution=self.monthly_contribution,
+            annual_contribution_growth=self.annual_contribution_growth,
+            contribution_day=self.contribution_day,
+            cash_interest_rate=self.cash_interest_rate,
+            dividend_policy=self.dividend_policy,
+            fixed_fee=self.fixed_fee,
+            fee_rate=self.fee_rate,
+            slippage=self.slippage,
         )
 
 
-class SyntheticStressInput(ApiModel):
-    ratios: tuple[int, ...] = Field(min_length=1)
-    passed: bool
+class RatioSearchInput(ApiModel):
+    minimum_basis_points: int = Field(default=0, ge=0, le=10_000)
+    maximum_basis_points: int = Field(default=10_000, ge=0, le=10_000)
+    step_basis_points: int = Field(default=1_000, gt=0, le=10_000)
+    monotone: bool = True
 
-    def to_domain(self) -> SyntheticStress:
-        return SyntheticStress(self.ratios, self.passed)
+    @model_validator(mode="after")
+    def validate_range(self) -> Self:
+        if self.maximum_basis_points < self.minimum_basis_points:
+            raise ValueError("Maximum ratio must not be less than minimum ratio")
+        if (
+            self.maximum_basis_points - self.minimum_basis_points
+        ) % self.step_basis_points:
+            raise ValueError("Ratio range must be divisible by step")
+        return self
+
+    def to_domain(self) -> RatioSearch:
+        return RatioSearch(
+            minimum_basis_points=self.minimum_basis_points,
+            maximum_basis_points=self.maximum_basis_points,
+            step_basis_points=self.step_basis_points,
+            monotone=self.monotone,
+        )
+
+
+class WalkForwardInput(ApiModel):
+    n_splits: int = Field(default=3, gt=0)
+    minimum_train_sessions: int | None = Field(default=None, gt=0)
+    test_size_sessions: int | None = Field(default=None, gt=0)
+
+    def to_domain(self) -> WalkForwardSettings:
+        return WalkForwardSettings(
+            n_splits=self.n_splits,
+            minimum_train_sessions=self.minimum_train_sessions,
+            test_size_sessions=self.test_size_sessions,
+        )
+
+
+class SyntheticStressRequest(ApiModel):
+    enabled: bool = False
+    annual_expense_ratio: float = Field(default=0.0, ge=0.0)
+    max_portfolio_drawdown: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_longest_trap_days: int = Field(default=100_000, ge=0)
+
+    def to_domain(self) -> SyntheticStressSettings:
+        return SyntheticStressSettings(
+            enabled=self.enabled,
+            annual_expense_ratio=self.annual_expense_ratio,
+            max_portfolio_drawdown=self.max_portfolio_drawdown,
+            max_longest_trap_days=self.max_longest_trap_days,
+        )
 
 
 class OptimizationCreateRequest(VersionedModel):
-    candidates: tuple[OptimizationCandidateInput, ...] = Field(min_length=1)
-    independent_episode_count: int = Field(ge=0)
-    synthetic_stress: tuple[SyntheticStressInput, ...] = ()
+    family_id: str = Field(min_length=1)
+    target_symbol: str = Field(min_length=1)
+    strategy: StrategyTemplateInput
+    depths: tuple[PositiveRatio, ...] = Field(min_length=1)
+    ratio_search: RatioSearchInput = RatioSearchInput()
+    walk_forward: WalkForwardInput = WalkForwardInput()
+    synthetic_stress: SyntheticStressRequest = SyntheticStressRequest()
     minimum_independent_episodes: int = Field(default=5, gt=0)
     neighbor_radius_basis_points: int = Field(default=1000, gt=0)
     isolated_peak_penalty: float = Field(default=1.25, ge=0.0)
@@ -247,9 +333,28 @@ class OptimizationCreateRequest(VersionedModel):
         max_longest_trap_days=1260,
     )
 
-    def to_domain(self) -> tuple[OptimizationRequest, AnalysisFrames]:
-        return (
-            OptimizationRequest(
+    @model_validator(mode="after")
+    def validate_depths(self) -> Self:
+        if len(set(self.depths)) != len(self.depths):
+            raise ValueError("Depth ratios must be unique")
+        return self
+
+    def to_domain(
+        self,
+        *,
+        prototype_symbol: str,
+        target_leverage: int,
+    ) -> HistoricalOptimizationRequest:
+        return HistoricalOptimizationRequest(
+            family_id=self.family_id,
+            prototype_symbol=prototype_symbol,
+            target_symbol=self.target_symbol,
+            target_leverage=target_leverage,
+            strategy=self.strategy.to_domain(),
+            depths=self.depths,
+            ratio_search=self.ratio_search.to_domain(),
+            walk_forward=self.walk_forward.to_domain(),
+            scoring=OptimizationRequest(
                 minimum_independent_episodes=self.minimum_independent_episodes,
                 neighbor_radius_basis_points=self.neighbor_radius_basis_points,
                 isolated_peak_penalty=self.isolated_peak_penalty,
@@ -257,15 +362,7 @@ class OptimizationCreateRequest(VersionedModel):
                 balanced=self.balanced.to_domain(),
                 aggressive=self.aggressive.to_domain(),
             ),
-            AnalysisFrames(
-                actual_candidates=tuple(
-                    candidate.to_domain() for candidate in self.candidates
-                ),
-                independent_episode_count=self.independent_episode_count,
-                synthetic_stress=tuple(
-                    stress.to_domain() for stress in self.synthetic_stress
-                ),
-            ),
+            synthetic_stress=self.synthetic_stress.to_domain(),
         )
 
 
@@ -281,7 +378,7 @@ class JobResponse(VersionedModel):
         "queued",
         "running",
         "cancelling",
-        "completed",
+        "succeeded",
         "failed",
         "cancelled",
     ]
@@ -311,11 +408,63 @@ class JobResponse(VersionedModel):
         )
 
 
+class OptimizationProvenanceResponse(ApiModel):
+    family_id: str
+    prototype_symbol: str
+    target_symbol: str
+    source_kind: Literal["actual"]
+    strategy_start: date
+    strategy_end: date
+    walk_forward_splits: int
+    ratio_unit: Literal["basis_points"]
+
+
+class SyntheticStressSummaryResponse(ApiModel):
+    requested: bool
+    evaluated_candidates: int
+    passed_candidates: int
+
+
+class OptimizationCandidateResponse(ApiModel):
+    ratios: tuple[int, ...]
+    fold_oos_xirr: tuple[float, ...]
+    oos_xirr: float
+    stability_score: float
+    stability_adjusted_xirr: float
+    neighbor_count: int
+    worst_5_return: float
+    early_depletion_rate: float
+    longest_trap_days: int
+    synthetic_stress_pass: bool | None
+    pareto_member: bool
+    recommendation_labels: tuple[
+        Literal["conservative", "balanced", "aggressive"],
+        ...,
+    ]
+
+
+class RecommendationResponse(ApiModel):
+    profile: Literal["conservative", "balanced", "aggressive"]
+    ratios: tuple[int, ...]
+    oos_xirr: float
+    stability_adjusted_xirr: float
+
+
+class OptimizationResultPayload(VersionedModel):
+    mode: Literal["formal", "exploration_only"]
+    exploration_only: bool
+    independent_episode_count: int
+    provenance: OptimizationProvenanceResponse
+    candidates: tuple[OptimizationCandidateResponse, ...]
+    recommendations: tuple[RecommendationResponse, ...]
+    synthetic_stress: SyntheticStressSummaryResponse
+
+
 class ResultResponse(VersionedModel):
     id: str
     job_id: str
     kind: str
-    payload: dict[str, Any]
+    payload: OptimizationResultPayload
     created_at: str
 
     @classmethod
@@ -326,7 +475,7 @@ class ResultResponse(VersionedModel):
             id=record.id,
             job_id=record.job_id,
             kind=record.kind,
-            payload=record.payload,
+            payload=OptimizationResultPayload.model_validate(record.payload),
             created_at=record.created_at,
         )
 
@@ -335,12 +484,19 @@ class ResultListResponse(VersionedModel):
     results: tuple[ResultResponse, ...]
 
 
+class ReportContentResponse(ApiModel):
+    status: Literal["not_yet_exported"]
+    message: str
+    result_id: str
+    optimization: OptimizationResultPayload
+
+
 class ReportResponse(VersionedModel):
     id: str
     result_id: str | None
     title: str
     export_status: Literal["not_yet_exported", "exported"]
-    content: dict[str, Any]
+    content: ReportContentResponse
     created_at: str
 
     @classmethod
@@ -356,7 +512,7 @@ class ReportResponse(VersionedModel):
             result_id=record.result_id,
             title=record.title,
             export_status=export_status,
-            content=record.content,
+            content=ReportContentResponse.model_validate(record.content),
             created_at=record.created_at,
         )
 

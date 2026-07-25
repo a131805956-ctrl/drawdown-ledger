@@ -1,27 +1,44 @@
 from __future__ import annotations
 
 import json
-import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
-from enum import StrEnum
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from enum import Enum, StrEnum
 from typing import Any
 from uuid import uuid4
 
-from drawdown_lab.optimization.scoring import AnalysisFrames, OptimizationRequest, optimize
+from drawdown_lab.data.catalog import DataCatalog
+from drawdown_lab.optimization.evaluator import (
+    HistoricalOptimizationRequest,
+    OptimizationCancelled,
+    historical_request_from_payload,
+    historical_request_to_payload,
+    optimize_market_history,
+)
 from drawdown_lab.storage.database import Database
 
 SCHEMA_VERSION = "1.0"
 
 
 def deterministic_json(value: object) -> str:
+    def default(item: object) -> str:
+        if isinstance(item, (date, datetime)):
+            return item.isoformat()
+        if isinstance(item, Decimal):
+            return str(item)
+        if isinstance(item, Enum):
+            return str(item.value)
+        raise TypeError(f"Object of type {type(item).__name__} is not JSON serializable")
+
     return json.dumps(
         value,
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
         separators=(",", ":"),
+        default=default,
     )
 
 
@@ -33,13 +50,13 @@ class JobStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     CANCELLING = "cancelling"
-    COMPLETED = "completed"
+    SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
 
 TERMINAL_STATUSES = {
-    JobStatus.COMPLETED,
+    JobStatus.SUCCEEDED,
     JobStatus.FAILED,
     JobStatus.CANCELLED,
 }
@@ -218,15 +235,61 @@ class JobStore:
     def fail(self, job_id: str, error: str) -> JobRecord:
         timestamp = _now()
         with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status, cancellation_requested FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                raise JobNotFoundError(job_id)
+            if bool(row["cancellation_requested"]) or row["status"] == "cancelling":
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'cancelled', error = NULL, result_id = NULL,
+                        updated_at = ?, completed_at = ?
+                    WHERE id = ?
+                    """,
+                    (timestamp, timestamp, job_id),
+                )
+            elif row["status"] == "running":
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'failed', error = ?, updated_at = ?, completed_at = ?
+                    WHERE id = ?
+                    """,
+                    (error, timestamp, timestamp, job_id),
+                )
+        return self.get(job_id)
+
+    def reconcile_active(self) -> tuple[JobRecord, ...]:
+        """Cancel interrupted cancellations and safely requeue interrupted work."""
+
+        timestamp = _now()
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 UPDATE jobs
-                SET status = 'failed', error = ?, updated_at = ?, completed_at = ?
-                WHERE id = ? AND status = 'running'
+                SET status = 'cancelled', result_id = NULL,
+                    updated_at = ?, completed_at = ?
+                WHERE status = 'cancelling' OR cancellation_requested = 1
                 """,
-                (error, timestamp, timestamp, job_id),
+                (timestamp, timestamp),
             )
-        return self.get(job_id)
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'queued', progress = 0, updated_at = ?
+                WHERE status = 'running' AND cancellation_requested = 0
+                """,
+                (timestamp,),
+            )
+            rows = connection.execute(
+                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at, id"
+            ).fetchall()
+        return tuple(_job_from_row(row) for row in rows)
 
     def complete_with_result(
         self,
@@ -293,7 +356,9 @@ class JobStore:
                         deterministic_json(
                             {
                                 "message": "Report has not yet been exported.",
+                                "status": "not_yet_exported",
                                 "result_id": result_id,
+                                "optimization": payload,
                             }
                         ),
                         timestamp,
@@ -302,7 +367,7 @@ class JobStore:
                 connection.execute(
                     """
                     UPDATE jobs
-                    SET status = 'completed', progress = total, result_id = ?,
+                    SET status = 'succeeded', progress = total, result_id = ?,
                         updated_at = ?, completed_at = ?
                     WHERE id = ?
                     """,
@@ -384,16 +449,16 @@ class JobService:
     def __init__(
         self,
         store: JobStore,
+        data_catalog: DataCatalog,
         *,
         max_workers: int = 1,
         batch_size: int = 25,
-        batch_delay_seconds: float = 0.0,
     ) -> None:
-        if max_workers <= 0 or batch_size <= 0 or batch_delay_seconds < 0.0:
-            raise ValueError("Job executor settings must be non-negative and non-zero")
+        if max_workers <= 0 or batch_size <= 0:
+            raise ValueError("Job executor settings must be positive")
         self.store = store
+        self.data_catalog = data_catalog
         self.batch_size = batch_size
-        self.batch_delay_seconds = batch_delay_seconds
         self.executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="drawdown-optimizer",
@@ -401,51 +466,71 @@ class JobService:
 
     def submit(
         self,
-        request: OptimizationRequest,
-        frames: AnalysisFrames,
+        request: HistoricalOptimizationRequest,
     ) -> JobRecord:
         persisted = {
             "schema_version": SCHEMA_VERSION,
-            "request": asdict(request),
-            "frames": asdict(frames),
+            "request": historical_request_to_payload(request),
         }
+        vector_count = len(request.ratio_search.vectors(len(request.depths)))
+        total = vector_count * request.walk_forward.n_splits
+        if request.synthetic_stress.enabled:
+            total += vector_count
         job = self.store.create(
             kind="optimization",
             request_payload=persisted,
-            total=len(frames.actual_candidates),
+            total=total,
         )
-        self.executor.submit(self._run, job.id, request, frames)
+        self.executor.submit(self._run, job.id, request)
         return job
+
+    def reconcile(self) -> None:
+        for job in self.store.reconcile_active():
+            try:
+                persisted = json.loads(job.request_json)
+                request = historical_request_from_payload(persisted["request"])
+            except Exception as error:
+                self.store.start(job.id)
+                self.store.fail(
+                    job.id,
+                    f"PersistedRequestError: {error}",
+                )
+                continue
+            self.executor.submit(self._run, job.id, request)
 
     def _run(
         self,
         job_id: str,
-        request: OptimizationRequest,
-        frames: AnalysisFrames,
+        request: HistoricalOptimizationRequest,
     ) -> None:
         try:
             record = self.store.start(job_id)
             if record.status is JobStatus.CANCELLING or record.cancellation_requested:
                 self.store.mark_cancelled(job_id)
                 return
-            total = len(frames.actual_candidates)
-            for batch_start in range(0, total, self.batch_size):
-                if self.batch_delay_seconds:
-                    time.sleep(self.batch_delay_seconds)
-                if self.store.should_cancel(job_id):
-                    self.store.mark_cancelled(job_id)
-                    return
-                self.store.update_progress(
-                    job_id,
-                    min(total, batch_start + self.batch_size),
-                )
+            prototype = self.data_catalog.read(request.prototype_symbol)
+            traded = self.data_catalog.read(request.target_symbol)
+            if prototype is None or traded is None:
+                raise RuntimeError("Trusted market cache disappeared before evaluation")
 
-            result = optimize(request, frames)
+            def on_batch(completed: int, _: int) -> bool:
+                self.store.update_progress(job_id, completed)
+                return not self.store.should_cancel(job_id)
+
+            result = optimize_market_history(
+                request,
+                prototype,
+                traded,
+                evaluation_batch_size=self.batch_size,
+                on_batch=on_batch,
+            )
             self.store.complete_with_result(
                 job_id,
                 kind="optimization",
                 payload=asdict(result),
             )
+        except OptimizationCancelled:
+            self.store.mark_cancelled(job_id)
         except Exception as error:
             try:
                 if self.store.should_cancel(job_id):
