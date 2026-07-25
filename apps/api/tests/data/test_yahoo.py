@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pandas as pd
-
 from drawdown_lab.data.yahoo import market_frame_from_yahoo_history
 
 

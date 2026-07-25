@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-
 REQUIRED_MARKET_COLUMNS = (
     "raw_open",
     "raw_high",

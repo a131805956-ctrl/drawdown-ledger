@@ -19,8 +19,12 @@ Strategy code must use `price_close` for price drawdowns and must not apply
 ## Development
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install ".[dev]"
 python -m ruff check apps/api
 python -m mypy apps/api/src
 python -m pytest apps/api/tests/data -q
 ```
+
+This intentionally uses a non-editable install. It avoids editable `.pth`
+files, which can fail to load under legacy Windows code pages when the
+workspace path contains Chinese characters.

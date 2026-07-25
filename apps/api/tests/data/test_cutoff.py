@@ -1,7 +1,6 @@
 from datetime import date
 
 import pandas as pd
-
 from drawdown_lab.data.cutoff import last_session_on_or_before, policy_cutoff
 
 

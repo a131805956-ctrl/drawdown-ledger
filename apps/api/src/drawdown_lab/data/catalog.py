@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -31,8 +31,27 @@ class DataCatalog:
                 CREATE TABLE IF NOT EXISTS market_coverage (
                     symbol TEXT PRIMARY KEY,
                     coverage_end TEXT NOT NULL,
+                    actual_last_session TEXT,
+                    policy_cutoff TEXT,
                     updated_at TEXT NOT NULL
                 )
+                """
+            )
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(market_coverage)").fetchall()
+            }
+            if "actual_last_session" not in columns:
+                connection.execute(
+                    "ALTER TABLE market_coverage ADD COLUMN actual_last_session TEXT"
+                )
+            if "policy_cutoff" not in columns:
+                connection.execute("ALTER TABLE market_coverage ADD COLUMN policy_cutoff TEXT")
+            connection.execute(
+                """
+                UPDATE market_coverage
+                SET actual_last_session = COALESCE(actual_last_session, coverage_end),
+                    policy_cutoff = COALESCE(policy_cutoff, coverage_end)
                 """
             )
 
@@ -47,11 +66,25 @@ class DataCatalog:
         return tuple(row[0] for row in rows)
 
     def coverage_end(self, symbol: str) -> date | None:
+        return self.actual_last_session(symbol)
+
+    def actual_last_session(self, symbol: str) -> date | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT coverage_end FROM market_coverage WHERE symbol = ?", (symbol,)
+                "SELECT actual_last_session FROM market_coverage WHERE symbol = ?", (symbol,)
             ).fetchone()
         return date.fromisoformat(row[0]) if row is not None else None
+
+    def policy_cutoff(self, symbol: str) -> date | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT policy_cutoff FROM market_coverage WHERE symbol = ?", (symbol,)
+            ).fetchone()
+        return date.fromisoformat(row[0]) if row is not None else None
+
+    def is_complete_through(self, symbol: str, cutoff: date) -> bool:
+        completed_cutoff = self.policy_cutoff(symbol)
+        return completed_cutoff is not None and completed_cutoff >= cutoff
 
     def read(self, symbol: str) -> MarketFrame | None:
         path = self.path_for(symbol)
@@ -59,26 +92,57 @@ class DataCatalog:
             return None
         return MarketFrame(pd.read_parquet(path))
 
-    def store(self, symbol: str, frame: MarketFrame) -> None:
+    def store(
+        self, symbol: str, frame: MarketFrame, *, completed_cutoff: date | None = None
+    ) -> None:
         path = self.path_for(symbol)
         temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        backup_path = path.with_name(f".{path.name}.{uuid4().hex}.backup")
+        actual_last_session = frame.data.index[-1].date()
+        policy_cutoff = completed_cutoff or actual_last_session
+        had_existing_file = path.exists()
         try:
             frame.data.to_parquet(temporary_path)
+            if had_existing_file:
+                os.replace(path, backup_path)
             os.replace(temporary_path, path)
+            self._commit_metadata(symbol, actual_last_session, policy_cutoff)
+        except Exception:
+            if path.exists():
+                path.unlink()
+            if had_existing_file and backup_path.exists():
+                os.replace(backup_path, path)
+            raise
+        else:
+            if backup_path.exists():
+                backup_path.unlink()
         finally:
             if temporary_path.exists():
                 temporary_path.unlink()
+            if backup_path.exists():
+                backup_path.unlink()
 
-        coverage_end = frame.data.index[-1].date().isoformat()
-        updated_at = datetime.now(timezone.utc).isoformat()
+    def _commit_metadata(
+        self, symbol: str, actual_last_session: date, completed_cutoff: date
+    ) -> None:
+        updated_at = datetime.now(UTC).isoformat()
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO market_coverage (symbol, coverage_end, updated_at)
-                VALUES (?, ?, ?)
+                INSERT INTO market_coverage (
+                    symbol, coverage_end, actual_last_session, policy_cutoff, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(symbol) DO UPDATE SET
-                    coverage_end = excluded.coverage_end,
+                    coverage_end = excluded.actual_last_session,
+                    actual_last_session = excluded.actual_last_session,
+                    policy_cutoff = excluded.policy_cutoff,
                     updated_at = excluded.updated_at
                 """,
-                (symbol, coverage_end, updated_at),
+                (
+                    symbol,
+                    actual_last_session.isoformat(),
+                    actual_last_session.isoformat(),
+                    completed_cutoff.isoformat(),
+                    updated_at,
+                ),
             )

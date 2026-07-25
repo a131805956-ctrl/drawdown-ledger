@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable, cast
+from typing import cast
 
 import pandas as pd
 
@@ -10,6 +11,7 @@ from drawdown_lab.data.catalog import DataCatalog
 from drawdown_lab.data.cutoff import policy_cutoff
 from drawdown_lab.data.models import MarketFrame, merge_market_frames, validate_market_frame
 from drawdown_lab.data.provider import MarketDataProvider
+from drawdown_lab.domain.instruments import INSTRUMENT_FAMILIES
 
 
 class DataUpdateError(RuntimeError):
@@ -38,11 +40,10 @@ class UpdateCoordinator:
         cutoff = policy_cutoff(as_of)
         requests = 0
         refreshed_symbols: list[str] = []
-        symbols = self.symbols if self.symbols is not None else self.catalog.symbols()
+        symbols = self.symbols if self.symbols is not None else self._approved_symbols()
 
         for symbol in symbols:
-            coverage_end = self.catalog.coverage_end(symbol)
-            if coverage_end is not None and coverage_end >= cutoff:
+            if self.catalog.is_complete_through(symbol, cutoff):
                 continue
 
             existing = self.catalog.read(symbol)
@@ -52,7 +53,7 @@ class UpdateCoordinator:
                 validate_market_frame(refreshed)
                 merged = merge_market_frames(existing, refreshed)
                 validate_market_frame(merged)
-                self.catalog.store(symbol, merged)
+                self.catalog.store(symbol, merged, completed_cutoff=cutoff)
             except DataUpdateError:
                 raise
             except Exception as error:
@@ -68,3 +69,9 @@ class UpdateCoordinator:
             return date(1970, 1, 1)
         sessions = existing.data.index
         return cast(pd.Timestamp, sessions[max(0, len(sessions) - 5)]).date()
+
+    @staticmethod
+    def _approved_symbols() -> tuple[str, ...]:
+        return tuple(
+            instrument.symbol for family in INSTRUMENT_FAMILIES for instrument in family.instruments
+        )

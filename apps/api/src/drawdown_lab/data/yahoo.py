@@ -27,14 +27,10 @@ def market_frame_from_yahoo_history(history: pd.DataFrame) -> MarketFrame:
         result[destination] = history[source].astype(float).to_numpy()
     result["adj_close"] = history["Adj Close"].astype(float).to_numpy()
     result["dividend_raw"] = (
-        history["Dividends"].astype(float).to_numpy()
-        if "Dividends" in history
-        else 0.0
+        history["Dividends"].astype(float).to_numpy() if "Dividends" in history else 0.0
     )
     split_events = (
-        history["Stock Splits"].astype(float).to_numpy()
-        if "Stock Splits" in history
-        else 0.0
+        history["Stock Splits"].astype(float).to_numpy() if "Stock Splits" in history else 0.0
     )
     result["split_ratio"] = pd.Series(split_events, index=result.index).replace(0.0, 1.0)
 
