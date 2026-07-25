@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pandas as pd
 from drawdown_lab.analysis.cashflows import (
+    CashFlow,
     ContributionSchedule,
     accrue_cash,
     bonus,
@@ -187,3 +188,53 @@ def test_dated_set_and_one_time_events_post_on_next_valid_session() -> None:
         Decimal("550.00"),
         Decimal("750.00"),
     ]
+
+
+def test_midmonth_start_counts_march_as_first_completed_contribution_month() -> None:
+    schedule = ContributionSchedule(
+        monthly=Decimal("100"),
+        annual_growth=Decimal("0.10"),
+    )
+
+    flows = schedule.due_cashflows(
+        date(2031, 3, 1),
+        plan_start=date(2030, 2, 15),
+    )
+
+    assert flows[0] == CashFlow(date(2030, 3, 1), Decimal("100.00"))
+    assert [flow.amount for flow in flows[:12]] == [Decimal("100.00")] * 12
+    assert flows[12] == CashFlow(date(2031, 3, 1), Decimal("110.00"))
+
+
+def test_contribution_day_uses_first_due_date_on_or_after_midmonth_start() -> None:
+    schedule = ContributionSchedule(
+        monthly=Decimal("100"),
+        annual_growth=Decimal("0.10"),
+        contribution_day=20,
+    )
+
+    flows = schedule.due_cashflows(
+        date(2031, 2, 20),
+        plan_start=date(2030, 2, 15),
+    )
+
+    assert flows[0] == CashFlow(date(2030, 2, 20), Decimal("100.00"))
+    assert [flow.amount for flow in flows[:12]] == [Decimal("100.00")] * 12
+    assert flows[12] == CashFlow(date(2031, 2, 20), Decimal("110.00"))
+
+
+def test_paused_month_does_not_advance_completed_contribution_count() -> None:
+    schedule = ContributionSchedule(
+        monthly=Decimal("100"),
+        annual_growth=Decimal("0.10"),
+        events=(pause("2030-07"), resume("2030-08")),
+    )
+
+    flows = schedule.due_cashflows(
+        date(2031, 4, 1),
+        plan_start=date(2030, 2, 15),
+    )
+
+    assert date(2030, 7, 1) not in [flow.date for flow in flows]
+    assert [flow.amount for flow in flows[:12]] == [Decimal("100.00")] * 12
+    assert flows[12] == CashFlow(date(2031, 4, 1), Decimal("110.00"))

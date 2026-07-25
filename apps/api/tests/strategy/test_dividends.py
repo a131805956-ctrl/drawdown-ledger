@@ -6,7 +6,7 @@ from decimal import Decimal
 import pandas as pd
 import pytest
 from drawdown_lab.analysis.strategy import DividendPolicy, StrategyConfig, simulate_strategy
-from drawdown_lab.data.models import MarketFrame
+from drawdown_lab.data.models import MarketFrame, validate_market_frame
 
 
 def _action_frame(
@@ -121,3 +121,10 @@ def test_reinvestment_waits_through_invalid_raw_open() -> None:
 
     assert result.shares == Decimal("14")
     assert result.cash == Decimal("0.00")
+
+
+def test_negative_raw_dividend_is_rejected_before_strategy_accounting() -> None:
+    frame = _action_frame(opens=[10, 10], dividends=[-0.01, 0])
+
+    with pytest.raises(ValueError, match="dividend_raw"):
+        validate_market_frame(frame)

@@ -46,6 +46,8 @@ def validate_market_frame(frame: MarketFrame) -> None:
         raise ValueError("Market frame contains null required values")
     if (data["split_ratio"] <= 0).any():
         raise ValueError("Market frame split_ratio values must be positive")
+    if (data["dividend_raw"] < 0).any():
+        raise ValueError("Market frame dividend_raw values must be non-negative")
 
 
 def merge_market_frames(existing: MarketFrame | None, refreshed: MarketFrame) -> MarketFrame:

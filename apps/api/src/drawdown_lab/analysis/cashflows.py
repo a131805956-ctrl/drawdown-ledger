@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -51,16 +52,17 @@ class ContributionSchedule:
     annual_growth: Decimal = Decimal("0")
     start: date | None = None
     events: tuple[ContributionEvent, ...] = ()
+    contribution_day: int = 1
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "monthly", quantize_money(self.monthly))
         object.__setattr__(self, "annual_growth", as_decimal(self.annual_growth))
-        if self.start is not None:
-            object.__setattr__(self, "start", self.start.replace(day=1))
         if self.monthly < 0:
             raise ValueError("Monthly contribution must be non-negative")
         if self.annual_growth <= Decimal("-1"):
             raise ValueError("Annual growth must be greater than -1")
+        if not 1 <= self.contribution_day <= 31:
+            raise ValueError("Contribution day must be between 1 and 31")
         seen: set[tuple[date, str]] = set()
         for event in self.events:
             if event.amount < 0:
@@ -93,7 +95,6 @@ class ContributionSchedule:
         effective_start = self.start or plan_start
         if effective_start is None:
             raise ValueError("Contribution schedule requires a plan start")
-        effective_start = effective_start.replace(day=1)
         posting_start = max(effective_start, plan_start or effective_start)
         if through < effective_start:
             return ()
@@ -102,9 +103,14 @@ class ContributionSchedule:
         completed = 0
         current_monthly = self.monthly
         monthly_dates: list[date] = []
-        cursor = effective_start
+        cursor = effective_start.replace(day=1)
+        first_due = _monthly_due(cursor, self.contribution_day)
+        if first_due < effective_start:
+            cursor = _next_month(cursor)
         while cursor <= through:
-            monthly_dates.append(cursor)
+            due_date = _monthly_due(cursor, self.contribution_day)
+            if due_date <= through:
+                monthly_dates.append(due_date)
             cursor = _next_month(cursor)
         event_dates = {
             event.month
@@ -150,6 +156,11 @@ def _next_month(value: date) -> date:
 
 def _month_end(value: date) -> date:
     return _next_month(value) - date.resolution
+
+
+def _monthly_due(month: date, contribution_day: int) -> date:
+    day = min(contribution_day, monthrange(month.year, month.month)[1])
+    return date(month.year, month.month, day)
 
 
 def accrue_cash(principal: Money, annual_rate: Decimal, actual_days: int) -> Money:

@@ -18,8 +18,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 
-def _frame(prices: list[int]) -> MarketFrame:
+def _frame(prices: list[int], dividends: list[float] | None = None) -> MarketFrame:
     index = pd.date_range("2020-01-01", periods=len(prices), freq="B")
+    dividend_values = dividends or [0.0] * len(prices)
     return MarketFrame(
         pd.DataFrame(
             {
@@ -32,7 +33,7 @@ def _frame(prices: list[int]) -> MarketFrame:
                 "price_low": prices,
                 "price_close": prices,
                 "adj_close": prices,
-                "dividend_raw": 0.0,
+                "dividend_raw": dividend_values,
                 "split_ratio": 1.0,
             },
             index=index,
@@ -108,6 +109,7 @@ def test_zero_cost_generated_paths_preserve_cash_and_share_accounting(
     interest_bps=st.integers(min_value=0, max_value=1_000),
     fixed_fee=st.integers(min_value=0, max_value=100),
     fee_bps=st.integers(min_value=0, max_value=500),
+    dividend_cents=st.integers(min_value=0, max_value=100),
 )
 def test_generated_events_rates_and_fees_never_make_balances_negative(
     prices: list[int],
@@ -117,8 +119,9 @@ def test_generated_events_rates_and_fees_never_make_balances_negative(
     interest_bps: int,
     fixed_fee: int,
     fee_bps: int,
+    dividend_cents: int,
 ) -> None:
-    frame = _frame(prices)
+    frame = _frame(prices, [dividend_cents / 100.0] * len(prices))
     schedule = ContributionSchedule(
         monthly=Decimal(monthly),
         events=(bonus("2020-01", Decimal(one_time)),),
