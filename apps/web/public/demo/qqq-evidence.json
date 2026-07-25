@@ -1,0 +1,31 @@
+{
+  "data_classification": "illustrative_synthetic_fixture",
+  "demo_version": "2026-07-31-v1",
+  "display_label": "Fixed illustrative demo - not live market evidence",
+  "evidence": [
+    {
+      "independent_episode_count": 2,
+      "median_forward_total_return_1y": 0.18,
+      "overlapping_day_count": 6,
+      "positive_forward_return_rate_1y": 0.5,
+      "threshold": -0.2,
+      "v_recovery_rate_126_sessions": 0.5
+    },
+    {
+      "independent_episode_count": 1,
+      "median_forward_total_return_1y": 0.24,
+      "overlapping_day_count": 3,
+      "positive_forward_return_rate_1y": 1.0,
+      "threshold": -0.3,
+      "v_recovery_rate_126_sessions": 1.0
+    }
+  ],
+  "fixed_data_date": "2026-07-31",
+  "live": false,
+  "policy_cutoff": "2026-07-31",
+  "prototype_signal_symbol": "QQQ",
+  "sample_warning": "Illustrative synthetic fixture only; counts and returns are not historical QQQ findings.",
+  "schema_version": "1.0",
+  "source_kind": "synthetic_demo",
+  "symbol": "QQQ"
+}
