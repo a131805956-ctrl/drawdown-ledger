@@ -54,7 +54,7 @@
 - Produces: `Instrument`, `InstrumentFamily`, `INSTRUMENT_FAMILIES`
 - Produces: `policy_cutoff(as_of: date) -> date`
 - Produces: `last_session_on_or_before(index: DatetimeIndex, cutoff: date) -> date`
-- Produces: `MarketDataProvider.fetch(symbol: str, start: date, end: date) -> MarketFrame`
+- Produces: `MarketDataProvider.fetch(symbol: str, start: date, end: date) -> MarketFrame` with raw OHLC, split-adjusted price OHLC, adjusted close, raw dividend, and split ratio
 - Produces: `DataCatalog`, `UpdateCoordinator.ensure_current(as_of: date) -> UpdateSummary`
 
 - [ ] **Step 1: Write failing registry and cutoff tests**
@@ -167,7 +167,7 @@ gh pr create --title "feat: add market data pipeline" --body-file .github/pr-bod
 
 ```python
 def test_overlapping_days_are_not_independent_episodes() -> None:
-    frame = frame_from_closes([100, 80, 75, 85, 100, 79, 101])
+    frame = frame_from_closes([100, 80, 75, 85, 101, 79, 102])
     report = analyze_threshold(frame, threshold=-0.20)
     assert report.n_day == 3
     assert report.n_episode == 2
