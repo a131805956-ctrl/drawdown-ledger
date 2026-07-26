@@ -10,6 +10,34 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Invoke-StartupDataUpdate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$UpdateAction
+    )
+
+    try {
+        $summary = & $UpdateAction
+        return [pscustomobject]@{
+            Status = [string]$summary.Status
+            Degraded = $false
+            ExitPolicy = 'continue-running'
+            Message = 'Data update completed.'
+            Summary = $summary
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Status = 'stale-cache'
+            Degraded = $true
+            ExitPolicy = 'continue-running'
+            Message = 'Data update failed; continuing with the existing cache.'
+            Summary = $null
+        }
+    }
+}
+
 if ($MyInvocation.InvocationName -ne '.') {
     $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
     $runtimeRoot = Join-Path $projectRoot '.runtime'
@@ -84,7 +112,8 @@ if ($MyInvocation.InvocationName -ne '.') {
             -StatePath $statePath `
             -ProjectRoot $projectRoot `
             -CommandMarker $factory `
-            -ServiceName 'api'
+            -ServiceName 'api' `
+            -Port $ApiPort
     }
     finally {
         if ($null -eq $previousProjectRoot) {
@@ -116,20 +145,30 @@ if ($MyInvocation.InvocationName -ne '.') {
         throw "API did not become healthy at $healthUri."
     }
 
-    $updateSummary = $null
+    $updateResult = [pscustomobject]@{
+        Status = 'skipped'
+        Degraded = $false
+        ExitPolicy = 'continue-running'
+        Message = 'Data update skipped.'
+        Summary = $null
+    }
     if (-not $SkipDataUpdate) {
-        $updateSummary = & (Join-Path $PSScriptRoot 'Update-Data.ps1') `
-            -ApiBaseUrl "http://127.0.0.1:$ApiPort"
+        $updateResult = Invoke-StartupDataUpdate -UpdateAction {
+            & (Join-Path $PSScriptRoot 'Update-Data.ps1') `
+                -ApiBaseUrl "http://127.0.0.1:$ApiPort"
+        }
     }
     [pscustomobject]@{
-        Status = 'running'
-        ProcessId = $process.Id
-        LocalUrl = "http://127.0.0.1:$ApiPort/"
-        DataStatus = if ($null -eq $updateSummary) {
-            'skipped'
+        Status = if ($updateResult.Degraded) {
+            'running-degraded'
         }
         else {
-            $updateSummary.Status
+            'running'
         }
+        ProcessId = $process.Id
+        LocalUrl = "http://127.0.0.1:$ApiPort/"
+        DataStatus = $updateResult.Status
+        ExitPolicy = $updateResult.ExitPolicy
+        DataMessage = $updateResult.Message
     }
 }

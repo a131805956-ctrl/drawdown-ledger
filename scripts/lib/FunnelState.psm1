@@ -19,52 +19,6 @@ function Invoke-TailscaleCommand {
     return $output
 }
 
-function Get-FunnelRestoreCommands {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$RawJson
-    )
-
-    $configuration = $RawJson | ConvertFrom-Json
-    $commands = @(
-        [pscustomobject]@{ Arguments = [string[]]@('funnel', 'reset') }
-    )
-    if ($null -eq $configuration.Web) {
-        return $commands
-    }
-
-    foreach ($webProperty in @($configuration.Web.PSObject.Properties | Sort-Object Name)) {
-        $httpsPort = 443
-        if ($webProperty.Name -match ':(?<port>[0-9]+)$') {
-            $httpsPort = [int]$Matches.port
-        }
-        $handlers = $webProperty.Value.Handlers
-        if ($null -eq $handlers) {
-            continue
-        }
-
-        foreach ($handlerProperty in @($handlers.PSObject.Properties | Sort-Object Name)) {
-            $handler = $handlerProperty.Value
-            $proxy = [string]$handler.Proxy
-            if ([string]::IsNullOrWhiteSpace($proxy)) {
-                throw (
-                    "Cannot safely restore unsupported Funnel handler '{0}'." -f
-                    $handlerProperty.Name
-                )
-            }
-
-            $arguments = @('funnel', '--bg', '--yes', '--https', [string]$httpsPort)
-            if ($handlerProperty.Name -ne '/') {
-                $arguments += @('--set-path', [string]$handlerProperty.Name)
-            }
-            $arguments += $proxy
-            $commands += [pscustomobject]@{ Arguments = [string[]]$arguments }
-        }
-    }
-    return $commands
-}
-
 function Write-AtomicJson {
     [CmdletBinding()]
     param(
@@ -118,8 +72,12 @@ function ConvertFrom-FunnelStatusJson {
     $rawJson = $RawJson.Trim()
     $configuration = $rawJson | ConvertFrom-Json
     $routes = @()
-    if ($null -ne $configuration.Web) {
-        foreach ($webProperty in @($configuration.Web.PSObject.Properties | Sort-Object Name)) {
+    $webPropertyValue = $configuration.PSObject.Properties['Web']
+    if ($null -ne $webPropertyValue -and $null -ne $webPropertyValue.Value) {
+        foreach ($webProperty in @(
+            $webPropertyValue.Value.PSObject.Properties |
+                Sort-Object Name
+        )) {
             $hostAndPort = $webProperty.Name
             $host = $hostAndPort
             $httpsPort = 443
@@ -128,18 +86,33 @@ function ConvertFrom-FunnelStatusJson {
                 $httpsPort = [int]$Matches.port
             }
 
-            $handlers = $webProperty.Value.Handlers
-            if ($null -eq $handlers) {
+            $handlersProperty = $webProperty.Value.PSObject.Properties['Handlers']
+            if ($null -eq $handlersProperty -or $null -eq $handlersProperty.Value) {
                 continue
             }
-            foreach ($handlerProperty in @($handlers.PSObject.Properties | Sort-Object Name)) {
-                $proxy = [string]$handlerProperty.Value.Proxy
-                if ([string]::IsNullOrWhiteSpace($proxy)) {
-                    continue
+            foreach ($handlerProperty in @(
+                $handlersProperty.Value.PSObject.Properties |
+                    Sort-Object Name
+            )) {
+                $proxyProperty = $handlerProperty.Value.PSObject.Properties['Proxy']
+                $proxy = if ($null -eq $proxyProperty) {
+                    ''
                 }
-
-                $target = $proxy -replace '^https?://', ''
-                $target = $target.TrimEnd('/')
+                else {
+                    [string]$proxyProperty.Value
+                }
+                $handlerKind = if ([string]::IsNullOrWhiteSpace($proxy)) {
+                    'unsupported'
+                }
+                else {
+                    'proxy'
+                }
+                $target = if ($handlerKind -eq 'proxy') {
+                    ($proxy -replace '^[A-Za-z+]+://', '').TrimEnd('/')
+                }
+                else {
+                    ''
+                }
                 $path = [string]$handlerProperty.Name
                 $publicPath = if ($path -eq '/') { '' } else { $path }
                 $publicPort = if ($httpsPort -eq 443) { '' } else { ":$httpsPort" }
@@ -150,6 +123,7 @@ function ConvertFrom-FunnelStatusJson {
                     Proxy = $proxy
                     Target = $target
                     PublicUrl = "https://$host$publicPort$publicPath"
+                    HandlerKind = $handlerKind
                 }
             }
         }
@@ -165,33 +139,120 @@ function ConvertFrom-FunnelStatusJson {
     }
 }
 
+function Get-FunnelStatusRoutes {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Status
+    )
+
+    if ($Status -is [Collections.IDictionary]) {
+        if ($Status.Contains('Routes')) {
+            return @($Status['Routes'])
+        }
+        return @()
+    }
+    $routesProperty = $Status.PSObject.Properties['Routes']
+    if ($null -eq $routesProperty) {
+        return @()
+    }
+    return @($routesProperty.Value)
+}
+
+function Get-FunnelRouteProperty {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Route,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    if ($Route -is [Collections.IDictionary]) {
+        if ($Route.Contains($Name)) {
+            return $Route[$Name]
+        }
+        return $null
+    }
+    $property = $Route.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
+function ConvertTo-FunnelTargetIdentity {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$Target
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Target)) {
+        return ''
+    }
+    return ($Target -replace '^[A-Za-z+]+://', '').TrimEnd('/')
+}
+
+function Find-FunnelRoute {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Status,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PublicPath
+    )
+
+    return Get-FunnelStatusRoutes -Status $Status |
+        Where-Object {
+            [string](Get-FunnelRouteProperty -Route $_ -Name 'Path') -eq $PublicPath
+        } |
+        Select-Object -First 1
+}
+
 function Set-FunnelTarget {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [string]$Target,
 
-        [string]$PublicPath = '/'
+        [string]$PublicPath = '/',
+
+        [ValidateRange(1, 65535)]
+        [int]$HttpsPort = 443
     )
 
     $arguments = @('funnel', '--bg', '--yes')
+    if ($PublicPath -ne '/' -or $HttpsPort -ne 443) {
+        $arguments += @('--https', [string]$HttpsPort)
+    }
     if ($PublicPath -ne '/') {
-        $arguments += @('--https', '443', '--set-path', $PublicPath)
+        $arguments += @('--set-path', $PublicPath)
     }
     $arguments += $Target
     Invoke-TailscaleCommand -Arguments $arguments | Out-Null
 }
 
-function Set-FunnelConfiguration {
+function Remove-FunnelTarget {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$RawJson
+        [string]$PublicPath,
+
+        [ValidateRange(1, 65535)]
+        [int]$HttpsPort = 443
     )
 
-    foreach ($command in @(Get-FunnelRestoreCommands -RawJson $RawJson)) {
-        Invoke-TailscaleCommand -Arguments $command.Arguments | Out-Null
+    $arguments = @(
+        'funnel', '--yes', '--https', [string]$HttpsPort
+    )
+    if ($PublicPath -ne '/') {
+        $arguments += @('--set-path', $PublicPath)
     }
+    $arguments += 'off'
+    Invoke-TailscaleCommand -Arguments $arguments | Out-Null
 }
 
 function Open-DrawdownFunnel {
@@ -216,22 +277,22 @@ function Open-DrawdownFunnel {
         $PublicPath = $PublicPath.TrimEnd('/')
     }
 
-    $routes = @()
-    if ($status -is [Collections.IDictionary]) {
-        if ($status.Contains('Routes')) {
-            $routes = @($status['Routes'])
-        }
-    }
-    elseif ($null -ne $status.PSObject.Properties['Routes']) {
-        $routes = @($status.Routes)
-    }
-    $matchingRoute = $routes |
-        Where-Object { $_.Path -eq $PublicPath } |
-        Select-Object -First 1
+    $routes = @(Get-FunnelStatusRoutes -Status $status)
+    $matchingRoute = Find-FunnelRoute -Status $status -PublicPath $PublicPath
     if ($routes.Count -gt 0) {
         $pathOccupied = $null -ne $matchingRoute
-        $currentTarget = if ($pathOccupied) { $matchingRoute.Target } else { $null }
-        $currentPublicUrl = if ($pathOccupied) { $matchingRoute.PublicUrl } else { $null }
+        $currentTarget = if ($pathOccupied) {
+            Get-FunnelRouteProperty -Route $matchingRoute -Name 'Target'
+        }
+        else {
+            $null
+        }
+        $currentPublicUrl = if ($pathOccupied) {
+            Get-FunnelRouteProperty -Route $matchingRoute -Name 'PublicUrl'
+        }
+        else {
+            $null
+        }
     }
     else {
         $pathOccupied = [bool]$status.Occupied
@@ -239,14 +300,26 @@ function Open-DrawdownFunnel {
         $currentPublicUrl = $status.PublicUrl
     }
 
-    if ($pathOccupied -and $currentTarget -ne $Target -and -not $ReplaceExisting) {
+    $requestedIdentity = ConvertTo-FunnelTargetIdentity -Target $Target
+    $currentIdentity = ConvertTo-FunnelTargetIdentity -Target ([string]$currentTarget)
+    if ($pathOccupied -and [string]::IsNullOrWhiteSpace($currentIdentity)) {
+        throw (
+            "Tailscale Funnel path '$PublicPath' uses an unsupported handler; " +
+            'refusing to overwrite it.'
+        )
+    }
+    if (
+        $pathOccupied -and
+        $currentIdentity -ne $requestedIdentity -and
+        -not $ReplaceExisting
+    ) {
         throw (
             "Tailscale Funnel already routes {0} to {1}. " +
             'Use -ReplaceExisting to switch recoverably.'
         ) -f $currentPublicUrl, $currentTarget
     }
 
-    if ($pathOccupied -and $currentTarget -eq $Target) {
+    if ($pathOccupied -and $currentIdentity -eq $requestedIdentity) {
         if ($null -ne $matchingRoute) {
             return $matchingRoute
         }
@@ -260,19 +333,87 @@ function Open-DrawdownFunnel {
                 'Restore it before opening another route.'
             ) -f $StatePath
         }
+        $previousRoute = if ($pathOccupied) {
+            [ordered]@{
+                path = $PublicPath
+                target = [string]$currentTarget
+                proxy = [string](
+                    Get-FunnelRouteProperty -Route $matchingRoute -Name 'Proxy'
+                )
+                https_port = [int](
+                    Get-FunnelRouteProperty -Route $matchingRoute -Name 'HttpsPort'
+                )
+            }
+        }
+        else {
+            $null
+        }
+        if (
+            $null -ne $previousRoute -and
+            $previousRoute.https_port -le 0
+        ) {
+            $previousRoute.https_port = 443
+        }
         Write-AtomicJson -Path $StatePath -Value ([ordered]@{
-            schema_version = 1
+            schema_version = 2
             replacement_target = $Target
             public_path = $PublicPath
-            previous_raw_json = [string]$status.RawJson
+            https_port = 443
+            previous_route = $previousRoute
         })
         try {
-            Set-FunnelTarget -Target $Target -PublicPath $PublicPath
+            Set-FunnelTarget `
+                -Target $Target `
+                -PublicPath $PublicPath `
+                -HttpsPort 443
         }
         catch {
-            Set-FunnelConfiguration -RawJson ([string]$status.RawJson)
-            Remove-Item -LiteralPath $StatePath -Force
-            throw
+            $originalError = $_
+            try {
+                $rollbackStatus = Get-FunnelStatus
+                $rollbackRoute = Find-FunnelRoute `
+                    -Status $rollbackStatus `
+                    -PublicPath $PublicPath
+                $rollbackIdentity = if ($null -eq $rollbackRoute) {
+                    ''
+                }
+                else {
+                    ConvertTo-FunnelTargetIdentity -Target (
+                        [string](Get-FunnelRouteProperty `
+                            -Route $rollbackRoute `
+                            -Name 'Target')
+                    )
+                }
+                if ($rollbackIdentity -eq $requestedIdentity) {
+                    if ($null -eq $previousRoute) {
+                        Remove-FunnelTarget `
+                            -PublicPath $PublicPath `
+                            -HttpsPort 443
+                    }
+                    else {
+                        $rollbackTarget = if (
+                            [string]::IsNullOrWhiteSpace($previousRoute.proxy)
+                        ) {
+                            $previousRoute.target
+                        }
+                        else {
+                            $previousRoute.proxy
+                        }
+                        Set-FunnelTarget `
+                            -Target $rollbackTarget `
+                            -PublicPath $PublicPath `
+                            -HttpsPort $previousRoute.https_port
+                    }
+                }
+                Remove-Item -LiteralPath $StatePath -Force
+            }
+            catch {
+                throw (
+                    "Funnel update failed and safe rollback could not be completed. " +
+                    "Recovery state remains at '$StatePath'."
+                )
+            }
+            throw $originalError
         }
         return @{
             Occupied = $true
@@ -290,7 +431,11 @@ function Restore-DrawdownFunnel {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$StatePath
+        [string]$StatePath,
+
+        [string]$ExpectedPublicPath = '/drawdown-ledger',
+
+        [string]$ExpectedTarget = '127.0.0.1:8787'
     )
 
     if (-not (Test-Path -LiteralPath $StatePath)) {
@@ -298,11 +443,78 @@ function Restore-DrawdownFunnel {
     }
 
     $saved = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($saved.schema_version -ne 1 -or $null -eq $saved.previous_raw_json) {
+    if ($saved.schema_version -ne 2) {
+        throw "Invalid Funnel state snapshot: $StatePath"
+    }
+    $publicPath = [string]$saved.public_path
+    $replacementIdentity = ConvertTo-FunnelTargetIdentity `
+        -Target ([string]$saved.replacement_target)
+    if (
+        [string]::IsNullOrWhiteSpace($publicPath) -or
+        [string]::IsNullOrWhiteSpace($replacementIdentity)
+    ) {
+        throw "Invalid Funnel state snapshot: $StatePath"
+    }
+    if (-not $ExpectedPublicPath.StartsWith('/')) {
+        $ExpectedPublicPath = "/$ExpectedPublicPath"
+    }
+    if ($ExpectedPublicPath.Length -gt 1) {
+        $ExpectedPublicPath = $ExpectedPublicPath.TrimEnd('/')
+    }
+    $expectedIdentity = ConvertTo-FunnelTargetIdentity -Target $ExpectedTarget
+    if (
+        $publicPath -ne $ExpectedPublicPath -or
+        $replacementIdentity -ne $expectedIdentity
+    ) {
+        throw (
+            "Funnel ownership snapshot does not match the expected project path " +
+            "and target: $StatePath"
+        )
+    }
+    $httpsPort = [int]$saved.https_port
+    if ($httpsPort -le 0) {
         throw "Invalid Funnel state snapshot: $StatePath"
     }
 
-    Set-FunnelConfiguration -RawJson ([string]$saved.previous_raw_json)
+    $status = Get-FunnelStatus
+    $currentRoute = Find-FunnelRoute -Status $status -PublicPath $publicPath
+    if ($null -eq $currentRoute) {
+        if ($null -ne $saved.previous_route) {
+            throw (
+                "Funnel path '$publicPath' is missing; refusing to restore an " +
+                'older route without ownership proof.'
+            )
+        }
+        Remove-Item -LiteralPath $StatePath -Force
+        return $false
+    }
+    $currentIdentity = ConvertTo-FunnelTargetIdentity -Target (
+        [string](Get-FunnelRouteProperty -Route $currentRoute -Name 'Target')
+    )
+    if ($currentIdentity -ne $replacementIdentity) {
+        throw (
+            "Funnel path '$publicPath' is no longer project-owned; " +
+            'refusing to mutate it.'
+        )
+    }
+
+    if ($null -eq $saved.previous_route) {
+        Remove-FunnelTarget -PublicPath $publicPath -HttpsPort $httpsPort
+    }
+    else {
+        $previousTarget = if (
+            [string]::IsNullOrWhiteSpace([string]$saved.previous_route.proxy)
+        ) {
+            [string]$saved.previous_route.target
+        }
+        else {
+            [string]$saved.previous_route.proxy
+        }
+        Set-FunnelTarget `
+            -Target $previousTarget `
+            -PublicPath ([string]$saved.previous_route.path) `
+            -HttpsPort ([int]$saved.previous_route.https_port)
+    }
     Remove-Item -LiteralPath $StatePath -Force
     return $true
 }
@@ -311,9 +523,8 @@ Export-ModuleMember -Function @(
     'Get-FunnelStatus'
     'ConvertFrom-FunnelStatusJson'
     'Invoke-TailscaleCommand'
-    'Get-FunnelRestoreCommands'
     'Set-FunnelTarget'
-    'Set-FunnelConfiguration'
+    'Remove-FunnelTarget'
     'Open-DrawdownFunnel'
     'Restore-DrawdownFunnel'
 )

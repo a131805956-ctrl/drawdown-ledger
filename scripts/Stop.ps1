@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$KeepFunnel,
+    [string]$FunnelTarget = '127.0.0.1:8787',
+    [string]$PublicPath = '/drawdown-ledger',
     [switch]$DryRun
 )
 
@@ -15,6 +17,8 @@ if ($MyInvocation.InvocationName -ne '.') {
         [pscustomobject]@{
             Action = 'stop'
             RestoreFunnel = -not $KeepFunnel
+            FunnelTarget = $FunnelTarget
+            PublicPath = $PublicPath
             MutatesProcesses = $false
             ProcessState = $processState
             FunnelState = $funnelState
@@ -30,7 +34,10 @@ if ($MyInvocation.InvocationName -ne '.') {
         -ExpectedCommandMarker 'drawdown_lab.runtime:create_runtime_app'
     $restored = $false
     if (-not $KeepFunnel) {
-        $restored = Restore-DrawdownFunnel -StatePath $funnelState
+        $restored = Restore-DrawdownFunnel `
+            -StatePath $funnelState `
+            -ExpectedPublicPath $PublicPath `
+            -ExpectedTarget $FunnelTarget
     }
     [pscustomobject]@{
         Status = 'stopped'

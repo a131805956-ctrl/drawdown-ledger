@@ -41,7 +41,7 @@ function Get-ProcessState {
         return $null
     }
     $state = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($state.schema_version -ne 1) {
+    if ($state.schema_version -notin @(1, 2)) {
         throw "Unsupported process state schema in '$StatePath'."
     }
     return $state
@@ -87,7 +87,12 @@ function Save-ProcessState {
         [string]$CommandMarker,
 
         [Parameter(Mandatory = $true)]
-        [string]$ServiceName
+        [string]$ServiceName,
+
+        [string]$ArgumentList = '',
+
+        [ValidateRange(0, 65535)]
+        [int]$Port = 0
     )
 
     $directory = Split-Path -Parent $StatePath
@@ -99,11 +104,13 @@ function Save-ProcessState {
     )
     try {
         $state = [ordered]@{
-            schema_version = 1
+            schema_version = 2
             pid = $Id
             project_root = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
             command_marker = $CommandMarker
             service_name = $ServiceName
+            argument_list = $ArgumentList
+            port = $Port
             created_at = [DateTimeOffset]::UtcNow.ToString('o')
         }
         [IO.File]::WriteAllText(
@@ -118,6 +125,34 @@ function Save-ProcessState {
             Remove-Item -LiteralPath $temporaryPath -Force
         }
     }
+}
+
+function Test-ProcessStateLaunchConfiguration {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$State,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedArgumentList,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateRange(1, 65535)]
+        [int]$ExpectedPort
+    )
+
+    $argumentsProperty = $State.PSObject.Properties['argument_list']
+    $portProperty = $State.PSObject.Properties['port']
+    if ($null -eq $argumentsProperty -or $null -eq $portProperty) {
+        return $false
+    }
+    return (
+        ([string]$argumentsProperty.Value).Equals(
+            $ExpectedArgumentList,
+            [StringComparison]::Ordinal
+        ) -and
+        [int]$portProperty.Value -eq $ExpectedPort
+    )
 }
 
 function Start-ProjectProcess {
@@ -142,7 +177,11 @@ function Start-ProjectProcess {
         [string]$CommandMarker,
 
         [Parameter(Mandatory = $true)]
-        [string]$ServiceName
+        [string]$ServiceName,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateRange(1, 65535)]
+        [int]$Port
     )
 
     $state = Get-ProcessState -StatePath $StatePath
@@ -159,6 +198,17 @@ function Start-ProjectProcess {
             -ProjectRoot ([string]$state.project_root) `
             -CommandMarker ([string]$state.command_marker)
         ) {
+            if (-not (Test-ProcessStateLaunchConfiguration `
+                -State $state `
+                -ExpectedArgumentList $ArgumentList `
+                -ExpectedPort $Port
+            )) {
+                throw (
+                    'A project-owned process is already running with a different ' +
+                    'launch configuration. Stop it explicitly before changing ports ' +
+                    'or startup arguments.'
+                )
+            }
             return Get-Process -Id ([int]$state.pid)
         }
 
@@ -199,7 +249,9 @@ function Start-ProjectProcess {
         -Id $process.Id `
         -ProjectRoot $ProjectRoot `
         -CommandMarker $CommandMarker `
-        -ServiceName $ServiceName
+        -ServiceName $ServiceName `
+        -ArgumentList $ArgumentList `
+        -Port $Port
     return $process
 }
 
@@ -286,6 +338,7 @@ Export-ModuleMember -Function @(
     'Test-ProjectCommandLine'
     'Get-ProcessState'
     'Save-ProcessState'
+    'Test-ProcessStateLaunchConfiguration'
     'Start-ProjectProcess'
     'Test-ProjectProcess'
     'Stop-ProjectProcess'

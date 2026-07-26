@@ -115,20 +115,25 @@ Describe 'Project process ownership' {
 Describe 'Process state persistence' {
     It 'round-trips an explicit project process state file' {
         $statePath = Join-Path $TestDrive 'api.json'
+        $arguments = '-m uvicorn drawdown_lab.runtime:create_runtime_app --port 8787'
 
         Save-ProcessState `
             -StatePath $statePath `
             -Id 4242 `
             -ProjectRoot $ProjectRoot `
             -CommandMarker 'drawdown_lab.runtime:create_runtime_app' `
-            -ServiceName 'api'
+            -ServiceName 'api' `
+            -ArgumentList $arguments `
+            -Port 8787
 
         $state = Get-ProcessState -StatePath $statePath
-        $state.schema_version | Should Be 1
+        $state.schema_version | Should Be 2
         $state.pid | Should Be 4242
         $state.project_root | Should Be $ProjectRoot
         $state.command_marker | Should Be 'drawdown_lab.runtime:create_runtime_app'
         $state.service_name | Should Be 'api'
+        $state.argument_list | Should Be $arguments
+        $state.port | Should Be 8787
     }
 }
 
@@ -257,7 +262,8 @@ Describe 'Idempotent process startup' {
                 -StatePath $statePath `
                 -ProjectRoot $ProjectRoot `
                 -CommandMarker 'start-marker' `
-                -ServiceName 'test'
+                -ServiceName 'test' `
+                -Port 8787
             $second = Start-ProjectProcess `
                 -FilePath powershell.exe `
                 -ArgumentList $arguments `
@@ -265,7 +271,8 @@ Describe 'Idempotent process startup' {
                 -StatePath $statePath `
                 -ProjectRoot $ProjectRoot `
                 -CommandMarker 'start-marker' `
-                -ServiceName 'test'
+                -ServiceName 'test' `
+                -Port 8787
 
             $second.Id | Should Be $first.Id
             Stop-ProjectProcess `
@@ -275,6 +282,67 @@ Describe 'Idempotent process startup' {
                 Should Be $true
         }
         finally {
+            if ($null -ne $first) {
+                $remaining = Get-Process -Id $first.Id -ErrorAction SilentlyContinue
+                if ($null -ne $remaining) {
+                    Stop-Process -Id $first.Id -Force
+                }
+            }
+        }
+    }
+
+    It 'refuses a different launch port without reusing or stopping the live process' {
+        $statePath = Join-Path $TestDrive 'different-port.json'
+        $marker = 'different-port-marker'
+        $firstArguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 8787" +
+            '"'
+        )
+        $secondArguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 9999" +
+            '"'
+        )
+        $first = $null
+        try {
+            $first = Start-ProjectProcess `
+                -FilePath powershell.exe `
+                -ArgumentList $firstArguments `
+                -WorkingDirectory $ProjectRoot `
+                -StatePath $statePath `
+                -ProjectRoot $ProjectRoot `
+                -CommandMarker $marker `
+                -ServiceName 'test' `
+                -Port 8787
+
+            {
+                Start-ProjectProcess `
+                    -FilePath powershell.exe `
+                    -ArgumentList $secondArguments `
+                    -WorkingDirectory $ProjectRoot `
+                    -StatePath $statePath `
+                    -ProjectRoot $ProjectRoot `
+                    -CommandMarker $marker `
+                    -ServiceName 'test' `
+                    -Port 9999
+            } | Should Throw
+
+            (Get-Process -Id $first.Id -ErrorAction SilentlyContinue) |
+                Should Not BeNullOrEmpty
+            $saved = Get-ProcessState -StatePath $statePath
+            $saved.pid | Should Be $first.Id
+            $saved.port | Should Be 8787
+            $saved.argument_list | Should Be $firstArguments
+        }
+        finally {
+            if (Test-Path -LiteralPath $statePath) {
+                Stop-ProjectProcess `
+                    -StatePath $statePath `
+                    -ExpectedProjectRoot $ProjectRoot `
+                    -ExpectedCommandMarker $marker |
+                    Out-Null
+            }
             if ($null -ne $first) {
                 $remaining = Get-Process -Id $first.Id -ErrorAction SilentlyContinue
                 if ($null -ne $remaining) {
@@ -299,6 +367,23 @@ Describe 'Atomic data backup and restore' {
         New-Item -ItemType Directory -Path (
             Join-Path $script:DataProjectRoot 'data\market'
         ) -Force | Out-Null
+        $script:RealPython = (Get-Command python -ErrorAction Stop).Source
+        $venvScripts = Join-Path $script:DataProjectRoot '.venv\Scripts'
+        New-Item -ItemType Directory -Path $venvScripts -Force | Out-Null
+        $venvPython = Join-Path $venvScripts 'python.ps1'
+        [IO.File]::WriteAllText(
+            $venvPython,
+            (
+                "param(`r`n" +
+                "    [string]`$c,`r`n" +
+                '    [Parameter(ValueFromRemainingArguments = $true)]' +
+                "`r`n    [object[]]`$PythonArguments`r`n" +
+                ")`r`n" +
+                ('& "{0}" -c $c @PythonArguments' -f $script:RealPython) +
+                "`r`nexit `$LASTEXITCODE`r`n"
+            ),
+            (New-Object Text.UTF8Encoding($false))
+        )
         $env:DRAWDOWN_TEST_DATA_ROOT = $script:DataProjectRoot
         try {
             @'
@@ -315,7 +400,7 @@ for path in (root / ".runtime" / "drawdown.sqlite", root / "data" / "catalog.sql
 pd.DataFrame({"close": [100.0, 101.0]}).to_parquet(
     root / "data" / "market" / "QQQ.parquet"
 )
-'@ | python -
+'@ | & $script:RealPython -
             if ($LASTEXITCODE -ne 0) {
                 throw 'Unable to create backup fixtures.'
             }
@@ -391,6 +476,115 @@ pd.DataFrame({"close": [100.0, 101.0]}).to_parquet(
 
         $caught | Should Not BeNullOrEmpty
         $caught.Exception.Message | Should Match 'Stop.ps1'
+    }
+
+    It 'rejects a manifest target outside the runtime and data allowlist before writing' {
+        $backup = New-DrawdownBackup `
+            -ProjectRoot $script:DataProjectRoot `
+            -DestinationRoot $script:BackupRoot `
+            -Name 'allowlist-source'
+        $manifestPath = Join-Path $backup 'manifest.json'
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $entry = $manifest.files | Select-Object -First 1
+        $entry.path = 'scripts/escaped.db'
+        $source = Join-Path $backup $entry.path
+        New-Item -ItemType Directory -Path (Split-Path -Parent $source) -Force |
+            Out-Null
+        Copy-Item `
+            -LiteralPath (Join-Path $backup '.runtime\drawdown.sqlite') `
+            -Destination $source
+        $entry.sha256 = (
+            Get-FileHash -LiteralPath $source -Algorithm SHA256
+        ).Hash
+        $entry.size = (Get-Item -LiteralPath $source).Length
+        $manifest | ConvertTo-Json -Depth 10 |
+            Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
+        {
+            Restore-DrawdownBackup `
+                -ProjectRoot $script:DataProjectRoot `
+                -BackupPath $backup
+        } | Should Throw
+
+        Test-Path -LiteralPath (
+            Join-Path $script:DataProjectRoot 'scripts\escaped.db'
+        ) | Should Be $false
+    }
+
+    It 'rejects a junction in the restore target before touching its external file' {
+        if ($env:OS -ne 'Windows_NT') {
+            return
+        }
+        $backup = New-DrawdownBackup `
+            -ProjectRoot $script:DataProjectRoot `
+            -DestinationRoot $script:BackupRoot `
+            -Name 'junction-source'
+        $backupSource = Join-Path $backup 'data\link\escaped.db'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $backupSource) -Force |
+            Out-Null
+        Copy-Item `
+            -LiteralPath (Join-Path $backup '.runtime\drawdown.sqlite') `
+            -Destination $backupSource
+        $manifestPath = Join-Path $backup 'manifest.json'
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $manifest.files = @(
+            [pscustomobject]@{
+                path = 'data/link/escaped.db'
+                kind = 'sqlite'
+                size = (Get-Item -LiteralPath $backupSource).Length
+                sha256 = (
+                    Get-FileHash -LiteralPath $backupSource -Algorithm SHA256
+                ).Hash
+            }
+        )
+        $manifest | ConvertTo-Json -Depth 10 |
+            Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
+        $outside = Join-Path $TestDrive "outside-$caseId"
+        New-Item -ItemType Directory -Path $outside -Force | Out-Null
+        $outsideFile = Join-Path $outside 'escaped.db'
+        Copy-Item `
+            -LiteralPath (Join-Path $script:DataProjectRoot 'data\catalog.sqlite') `
+            -Destination $outsideFile
+        $beforeHash = (Get-FileHash -LiteralPath $outsideFile -Algorithm SHA256).Hash
+        New-Item `
+            -ItemType Junction `
+            -Path (Join-Path $script:DataProjectRoot 'data\link') `
+            -Target $outside |
+            Out-Null
+
+        {
+            Restore-DrawdownBackup `
+                -ProjectRoot $script:DataProjectRoot `
+                -BackupPath $backup
+        } | Should Throw
+
+        (Get-FileHash -LiteralPath $outsideFile -Algorithm SHA256).Hash |
+            Should Be $beforeHash
+    }
+
+    It 'uses the project virtualenv when PATH python cannot load Parquet support' {
+        $fakeBin = Join-Path $TestDrive "fake-python-$caseId"
+        New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
+        [IO.File]::WriteAllText(
+            (Join-Path $fakeBin 'python.cmd'),
+            "@echo off`r`nexit /b 97`r`n",
+            [Text.Encoding]::ASCII
+        )
+        $previousPath = $env:PATH
+        try {
+            $env:PATH = "$fakeBin;$previousPath"
+            $backup = New-DrawdownBackup `
+                -ProjectRoot $script:DataProjectRoot `
+                -DestinationRoot $script:BackupRoot `
+                -Name 'venv-python'
+        }
+        finally {
+            $env:PATH = $previousPath
+        }
+
+        Test-Path -LiteralPath (Join-Path $backup 'manifest.json') |
+            Should Be $true
     }
 }
 
@@ -497,5 +691,34 @@ Describe 'One-click lifecycle dry runs' {
         $plan.Action | Should Be 'stop'
         $plan.RestoreFunnel | Should Be $true
         $plan.MutatesProcesses | Should Be $false
+    }
+}
+
+Describe 'Startup data update degradation' {
+    BeforeAll {
+        . (Join-Path $ProjectRoot 'scripts\Start.ps1')
+    }
+
+    It 'continues with stale cache and an explicit zero-exit policy when update fails' {
+        $command = Get-Command `
+            Invoke-StartupDataUpdate `
+            -ErrorAction SilentlyContinue
+        $command | Should Not BeNullOrEmpty
+        if ($null -eq $command) {
+            return
+        }
+
+        $result = Invoke-StartupDataUpdate `
+            -UpdateAction {
+                throw 'provider unavailable'
+            } `
+            -WarningAction SilentlyContinue
+
+        $result.Status | Should Be 'stale-cache'
+        $result.Degraded | Should Be $true
+        $result.ExitPolicy | Should Be 'continue-running'
+        $result.Message |
+            Should Be 'Data update failed; continuing with the existing cache.'
+        ($result | Out-String) | Should Not Match 'provider unavailable'
     }
 }

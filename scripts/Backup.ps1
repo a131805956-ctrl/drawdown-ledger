@@ -27,6 +27,30 @@ function Get-ProjectRelativePath {
     return $fullPath.Substring($root.Length).Replace('\', '/')
 }
 
+function Get-DrawdownProjectPython {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectRoot
+    )
+
+    $candidates = @(
+        (Join-Path $ProjectRoot '.venv\Scripts\python.exe'),
+        (Join-Path $ProjectRoot '.venv\Scripts\python.cmd'),
+        (Join-Path $ProjectRoot '.venv\Scripts\python.ps1'),
+        (Join-Path $ProjectRoot '.venv\bin\python')
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return [IO.Path]::GetFullPath($candidate)
+        }
+    }
+    throw (
+        "Project virtualenv Python was not found under '{0}\.venv'. " +
+        'Run scripts\Start.ps1 before backup or restore.'
+    ) -f ([IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/'))
+}
+
 function Test-DrawdownDataArtifact {
     [CmdletBinding()]
     param(
@@ -35,7 +59,10 @@ function Test-DrawdownDataArtifact {
 
         [Parameter(Mandatory = $true)]
         [ValidateSet('sqlite', 'parquet')]
-        [string]$Kind
+        [string]$Kind,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PythonPath
     )
 
     if ($Kind -eq 'sqlite') {
@@ -55,7 +82,7 @@ import pyarrow.parquet as parquet
 parquet.read_metadata(sys.argv[1])
 '@
     }
-    & python -c $validation $Path
+    & $PythonPath -c $validation $Path
     if ($LASTEXITCODE -ne 0) {
         throw "Backup validation failed for $Kind artifact '$Path'."
     }
@@ -68,7 +95,10 @@ function Copy-SqliteSnapshot {
         [string]$Source,
 
         [Parameter(Mandatory = $true)]
-        [string]$Destination
+        [string]$Destination,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PythonPath
     )
 
     $backupScript = @'
@@ -82,7 +112,7 @@ finally:
     destination.close()
     source.close()
 '@
-    & python -c $backupScript $Source $Destination
+    & $PythonPath -c $backupScript $Source $Destination
     if ($LASTEXITCODE -ne 0) {
         throw "SQLite backup failed for '$Source'."
     }
@@ -104,6 +134,7 @@ function New-DrawdownBackup {
 
     $project = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
     $destination = [IO.Path]::GetFullPath($DestinationRoot).TrimEnd('\', '/')
+    $pythonPath = Get-DrawdownProjectPython -ProjectRoot $project
     if (-not (Test-Path -LiteralPath $destination)) {
         New-Item -ItemType Directory -Path $destination -Force | Out-Null
     }
@@ -153,12 +184,16 @@ function New-DrawdownBackup {
             if ($kind -eq 'sqlite') {
                 Copy-SqliteSnapshot `
                     -Source $sourceFile.FullName `
-                    -Destination $backupFile
+                    -Destination $backupFile `
+                    -PythonPath $pythonPath
             }
             else {
                 Copy-Item -LiteralPath $sourceFile.FullName -Destination $backupFile
             }
-            Test-DrawdownDataArtifact -Path $backupFile -Kind $kind
+            Test-DrawdownDataArtifact `
+                -Path $backupFile `
+                -Kind $kind `
+                -PythonPath $pythonPath
             $backedUpFile = Get-Item -LiteralPath $backupFile
             $manifestFiles += [ordered]@{
                 path = $relativePath
