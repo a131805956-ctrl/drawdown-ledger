@@ -34,6 +34,7 @@ def test_openapi_exposes_complete_versioned_contract(tmp_path: Path) -> None:
         "/api/v1/results",
         "/api/v1/results/{result_id}",
         "/api/v1/reports",
+        "/api/v1/reports/export",
         "/api/v1/reports/{report_id}",
     }
     assert expected_paths <= set(schema["paths"])

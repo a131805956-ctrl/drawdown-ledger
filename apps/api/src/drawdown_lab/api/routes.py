@@ -22,6 +22,8 @@ from drawdown_lab.api.schemas import (
     OptimizationAcceptedResponse,
     OptimizationCreateRequest,
     PerformanceResponse,
+    ReportExportRequest,
+    ReportExportResponse,
     ReportListResponse,
     ReportResponse,
     ResultListResponse,
@@ -29,7 +31,7 @@ from drawdown_lab.api.schemas import (
     StrategyBacktestRequest,
     StrategyBacktestResponse,
 )
-from drawdown_lab.data.catalog import DataCatalog
+from drawdown_lab.data.catalog import DataCatalog, DataIntegrityError
 from drawdown_lab.data.models import MarketFrame
 from drawdown_lab.data.update import UpdateCoordinator
 from drawdown_lab.domain.instruments import (
@@ -38,6 +40,7 @@ from drawdown_lab.domain.instruments import (
     InstrumentFamilyNotFoundError,
     resolve_family_instrument,
 )
+from drawdown_lab.reports.render import ReportExporter
 from drawdown_lab.storage.jobs import (
     InvalidJobTransitionError,
     JobNotFoundError,
@@ -52,6 +55,7 @@ def create_router(
     job_service: JobService,
     data_catalog: DataCatalog,
     update_coordinator: UpdateCoordinator | None,
+    report_exporter: ReportExporter,
 ) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1",
@@ -264,6 +268,25 @@ def create_router(
                 for record in job_store.list_reports()
             )
         )
+
+    @router.post(
+        "/reports/export",
+        response_model=ReportExportResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def export_report(request: ReportExportRequest) -> ReportExportResponse:
+        try:
+            manifest = report_exporter.export_report(
+                request.result_id,
+                request.formats,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Result not found") from error
+        except DataIntegrityError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ReportExportResponse.from_manifest(manifest)
 
     @router.get("/reports/{report_id}", response_model=ReportResponse)
     def get_report(report_id: str) -> ReportResponse:

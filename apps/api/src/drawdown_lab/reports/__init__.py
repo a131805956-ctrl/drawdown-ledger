@@ -3,14 +3,15 @@
 from drawdown_lab.reports.models import (
     ExportManifest,
     ReportArtifact,
+    ReportDataLineage,
     ReportProvenance,
 )
-from drawdown_lab.reports.render import ResultSource, export_report
+from drawdown_lab.reports.render import ReportExporter
 
 __all__ = [
     "ExportManifest",
     "ReportArtifact",
+    "ReportDataLineage",
     "ReportProvenance",
-    "ResultSource",
-    "export_report",
+    "ReportExporter",
 ]

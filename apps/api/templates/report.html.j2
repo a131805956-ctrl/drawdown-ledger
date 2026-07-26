@@ -77,16 +77,30 @@
       <dl>
         <dt>Engine version</dt><dd>{{ lineage.engine_version }}</dd>
         <dt>Git commit</dt><dd>{{ lineage.git_commit }}</dd>
+        <dt>Code state</dt><dd>{{ lineage.code_state }}</dd>
         <dt>Policy cutoff</dt><dd>{{ lineage.policy_cutoff }}</dd>
         <dt>Actual session cutoff</dt><dd>{{ lineage.actual_session_cutoff }}</dd>
         <dt>Generated at</dt><dd>{{ lineage.generated_at }} · {{ lineage.timezone }}</dd>
-        {% for symbol, digest in lineage.data_hashes|dictsort %}
-        <dt>Data SHA-256 · {{ symbol }}</dt><dd>{{ digest }}</dd>
+        <dt>Result SHA-256</dt><dd>{{ lineage.result_sha256 }}</dd>
+        {% for symbol, snapshot in lineage.data_lineage|dictsort %}
+        <dt>Data source · {{ symbol }}</dt>
+        <dd>
+          {{ snapshot.provider }} · fetched {{ snapshot.fetched_at }} ·
+          {{ snapshot.classification }} · SHA-256 {{ snapshot.sha256 }}
+        </dd>
         {% endfor %}
       </dl>
     </section>
 
     <section>
+      <h2>實際／合成分界</h2>
+      <dl>
+        {% for key, value in lineage.analysis_boundary|dictsort %}
+        <dt>{{ key }}</dt><dd>{{ value }}</dd>
+        {% endfor %}
+      </dl>
+      <h2>執行參數</h2>
+      <pre>{{ parameters_json }}</pre>
       <h2>假設</h2>
       <ul>{% for item in lineage.assumptions %}<li>{{ item }}</li>{% endfor %}</ul>
       <h2>限制</h2>
@@ -99,31 +113,31 @@
     </section>
 
     <section>
-      <h2>事件（{{ events|length }}）</h2>
-      {% if events %}
+      <h2>最佳化候選（{{ candidates|length }}）</h2>
+      {% if candidates %}
       <table>
-        <thead><tr>{% for key in events[0] %}<th>{{ key }}</th>{% endfor %}</tr></thead>
+        <thead><tr>{% for key in candidates[0] %}<th>{{ key }}</th>{% endfor %}</tr></thead>
         <tbody>
-          {% for row in events %}
-          <tr>{% for key in events[0] %}<td>{{ row[key] }}</td>{% endfor %}</tr>
+          {% for row in candidates %}
+          <tr>{% for key in candidates[0] %}<td>{{ row[key] }}</td>{% endfor %}</tr>
           {% endfor %}
         </tbody>
       </table>
-      {% else %}<p>此結果未附事件列。</p>{% endif %}
+      {% else %}<p>此結果未附最佳化候選列。</p>{% endif %}
     </section>
 
     <section>
-      <h2>交易（{{ trades|length }}）</h2>
-      {% if trades %}
+      <h2>建議方案（{{ recommendations|length }}）</h2>
+      {% if recommendations %}
       <table>
-        <thead><tr>{% for key in trades[0] %}<th>{{ key }}</th>{% endfor %}</tr></thead>
+        <thead><tr>{% for key in recommendations[0] %}<th>{{ key }}</th>{% endfor %}</tr></thead>
         <tbody>
-          {% for row in trades %}
-          <tr>{% for key in trades[0] %}<td>{{ row[key] }}</td>{% endfor %}</tr>
+          {% for row in recommendations %}
+          <tr>{% for key in recommendations[0] %}<td>{{ row[key] }}</td>{% endfor %}</tr>
           {% endfor %}
         </tbody>
       </table>
-      {% else %}<p>此結果未附交易列。</p>{% endif %}
+      {% else %}<p>沒有候選通過正式限制條件。</p>{% endif %}
     </section>
   </main>
 </body>

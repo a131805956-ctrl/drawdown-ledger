@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+import hashlib
+import sqlite3
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import drawdown_lab.data.catalog as catalog_module
@@ -44,11 +46,25 @@ class MetadataFailingCatalog(DataCatalog):
     fail_metadata_commit = False
 
     def _commit_metadata(
-        self, symbol: str, actual_last_session: date, completed_cutoff: date
+        self,
+        symbol: str,
+        actual_last_session: date,
+        completed_cutoff: date,
+        *,
+        provider: str,
+        fetched_at: datetime,
+        sha256: str,
     ) -> None:
         if self.fail_metadata_commit:
             raise RuntimeError("metadata database is unavailable")
-        super()._commit_metadata(symbol, actual_last_session, completed_cutoff)
+        super()._commit_metadata(
+            symbol,
+            actual_last_session,
+            completed_cutoff,
+            provider=provider,
+            fetched_at=fetched_at,
+            sha256=sha256,
+        )
 
 
 def seeded_catalog(tmp_path: Path, coverage_end: date) -> DataCatalog:
@@ -67,6 +83,44 @@ def test_current_cache_performs_no_provider_request(tmp_path: Path) -> None:
 
     assert result.request_count == 0
     assert provider.calls == []
+
+
+def test_legacy_current_cache_migration_backfills_verifiable_lineage(
+    tmp_path: Path,
+) -> None:
+    market_dir = tmp_path / "market"
+    market_dir.mkdir(parents=True)
+    parquet_path = market_dir / "QQQ.parquet"
+    market_frame_through("2026-07-31").data.to_parquet(parquet_path)
+    with sqlite3.connect(tmp_path / "catalog.sqlite") as connection:
+        connection.execute(
+            """
+            CREATE TABLE market_coverage (
+                symbol TEXT PRIMARY KEY,
+                coverage_end TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO market_coverage (symbol, coverage_end, updated_at)
+            VALUES ('QQQ', '2026-07-31', '2026-08-01T00:45:00+00:00')
+            """
+        )
+
+    catalog = DataCatalog(tmp_path)
+    provider = RecordingProvider(market_frame_through("2026-07-31"))
+    result = UpdateCoordinator(provider, catalog, symbols=("QQQ",)).ensure_current(
+        date(2026, 8, 15)
+    )
+    snapshot = catalog.snapshot("QQQ")
+
+    assert result.request_count == 0
+    assert provider.calls == []
+    assert snapshot.provider == "legacy-local-cache"
+    assert snapshot.fetched_at == datetime(2026, 8, 1, 0, 45, tzinfo=UTC)
+    assert snapshot.sha256 == hashlib.sha256(parquet_path.read_bytes()).hexdigest()
 
 
 def test_failed_refresh_keeps_last_valid_parquet(tmp_path: Path) -> None:
@@ -93,6 +147,7 @@ def test_refreshes_with_five_cached_session_overlap(tmp_path: Path) -> None:
     assert provider.calls == [("QQQ", date(2026, 7, 24), date(2026, 7, 31))]
     assert result.request_count == 1
     assert catalog.coverage_end("QQQ") == date(2026, 7, 31)
+    assert catalog.snapshot("QQQ").provider.endswith("RecordingProvider")
 
 
 def test_invalid_refresh_does_not_replace_cache(tmp_path: Path) -> None:
@@ -169,3 +224,40 @@ def test_blank_catalog_uses_all_approved_registry_symbols(tmp_path: Path) -> Non
     approved = {item.symbol for family in INSTRUMENT_FAMILIES for item in family.instruments}
     assert result.request_count == len(approved)
     assert {symbol for symbol, _, _ in provider.calls} == approved
+
+
+def test_catalog_snapshot_binds_provider_fetch_time_cutoff_and_file_hash(
+    tmp_path: Path,
+) -> None:
+    catalog = DataCatalog(tmp_path)
+    fetched_at = datetime(2026, 8, 1, 1, 30, tzinfo=UTC)
+    catalog.store(
+        "QQQ",
+        market_frame_through("2026-07-31"),
+        completed_cutoff=date(2026, 7, 31),
+        provider="fixture-provider",
+        fetched_at=fetched_at,
+    )
+
+    snapshot = catalog.snapshot("QQQ")
+
+    assert snapshot.symbol == "QQQ"
+    assert snapshot.provider == "fixture-provider"
+    assert snapshot.fetched_at == fetched_at
+    assert snapshot.policy_cutoff == date(2026, 7, 31)
+    assert snapshot.actual_last_session == date(2026, 7, 31)
+    assert snapshot.sha256 == hashlib.sha256(catalog.path_for("QQQ").read_bytes()).hexdigest()
+
+
+def test_catalog_snapshot_rejects_parquet_tampering(tmp_path: Path) -> None:
+    catalog = DataCatalog(tmp_path)
+    catalog.store(
+        "QQQ",
+        market_frame_through("2026-07-31"),
+        provider="fixture-provider",
+    )
+    with catalog.path_for("QQQ").open("ab") as stream:
+        stream.write(b"tampered")
+
+    with pytest.raises(RuntimeError, match="hash"):
+        catalog.snapshot("QQQ")

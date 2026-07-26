@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class Database:
@@ -60,6 +60,7 @@ class Database:
                     kind TEXT NOT NULL,
                     schema_version TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
+                    lineage_json TEXT,
                     created_at TEXT NOT NULL
                 );
 
@@ -92,6 +93,7 @@ class Database:
             )
             self._migrate_completed_status(connection)
             self._migrate_job_leases(connection)
+            self._migrate_result_lineage(connection)
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS jobs_created_at_idx ON jobs(created_at, id)"
             )
@@ -178,3 +180,12 @@ class Database:
             connection.execute("ALTER TABLE jobs ADD COLUMN lease_owner TEXT")
         if "lease_expires_at" not in columns:
             connection.execute("ALTER TABLE jobs ADD COLUMN lease_expires_at TEXT")
+
+    @staticmethod
+    def _migrate_result_lineage(connection: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(results)").fetchall()
+        }
+        if "lineage_json" not in columns:
+            connection.execute("ALTER TABLE results ADD COLUMN lineage_json TEXT")

@@ -33,6 +33,28 @@ function Test-IsChildPath {
     )
 }
 
+function Assert-NoReparsePoint {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $Current = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    while ($null -ne $Current) {
+        if (
+            ($Current.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+        ) {
+            throw "$Label contains a symlink, junction, or reparse point."
+        }
+        if ($Current -is [IO.FileInfo]) {
+            $Current = $Current.Directory
+        }
+        else {
+            $Current = $Current.Parent
+        }
+    }
+}
+
 if (
     $ExportId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' -or
     $ExportId.Contains('..')
@@ -51,7 +73,10 @@ if ([string]::IsNullOrWhiteSpace($PublishedRoot)) {
 $ResolvedPrivateRoot = Get-FullDirectoryPath (
     (Resolve-Path -LiteralPath $PrivateRoot -ErrorAction Stop).Path
 )
+Assert-NoReparsePoint -Path $ResolvedPrivateRoot -Label 'Private report root'
 $SourceCandidate = Join-Path $ResolvedPrivateRoot $ExportId
+$SourceItem = Get-Item -LiteralPath $SourceCandidate -Force -ErrorAction Stop
+Assert-NoReparsePoint -Path $SourceItem.FullName -Label 'Export source'
 $ResolvedSource = Get-FullDirectoryPath (
     (Resolve-Path -LiteralPath $SourceCandidate -ErrorAction Stop).Path
 )
@@ -63,18 +88,12 @@ if (-not (Test-Path -LiteralPath $ResolvedSource -PathType Container)) {
 }
 
 $ManifestPath = Join-Path $ResolvedSource 'manifest.json'
-if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $ManifestPath)) {
     throw "Export bundle is missing manifest.json: $ExportId"
 }
-try {
-    $Manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $ManifestPath |
-        ConvertFrom-Json -ErrorAction Stop
-}
-catch {
-    throw "Export bundle has an invalid manifest: $ExportId"
-}
-if ([string]$Manifest.export_id -cne $ExportId) {
-    throw 'Manifest export_id does not match the explicit ExportId.'
+Assert-NoReparsePoint -Path $ManifestPath -Label 'Export source manifest'
+if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+    throw "Export bundle manifest.json is not a regular file: $ExportId"
 }
 
 $PrivacyScript = Join-Path $PSScriptRoot 'Test-PublishedPrivacy.ps1'
@@ -89,6 +108,7 @@ if (-not (Test-Path -LiteralPath $ResolvedPublishedRoot)) {
 $ResolvedPublishedRoot = Get-FullDirectoryPath (
     (Resolve-Path -LiteralPath $ResolvedPublishedRoot -ErrorAction Stop).Path
 )
+Assert-NoReparsePoint -Path $ResolvedPublishedRoot -Label 'Published report root'
 $Destination = Get-FullDirectoryPath (
     (Join-Path $ResolvedPublishedRoot $ExportId)
 )
@@ -116,6 +136,23 @@ try {
         Copy-Item -Destination $TemporaryDirectory -Recurse -Force -ErrorAction Stop
     & $PrivacyScript -Path $TemporaryDirectory -PythonExecutable $PythonExecutable |
         Out-Null
+    $SnapshotManifestPath = Join-Path $TemporaryDirectory 'manifest.json'
+    Assert-NoReparsePoint `
+        -Path $SnapshotManifestPath `
+        -Label 'Copied export manifest'
+    try {
+        $Manifest = Get-Content `
+            -Raw `
+            -Encoding UTF8 `
+            -LiteralPath $SnapshotManifestPath |
+            ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "Copied export bundle has an invalid manifest: $ExportId"
+    }
+    if ([string]$Manifest.export_id -cne $ExportId) {
+        throw 'Manifest export_id does not match the explicit ExportId.'
+    }
     Move-Item -LiteralPath $TemporaryDirectory -Destination $Destination -ErrorAction Stop
 }
 catch {
