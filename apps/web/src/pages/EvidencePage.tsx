@@ -327,7 +327,11 @@ export function EvidencePage() {
                 </p>
             </header>
 
-            <form className="research-controls" onSubmit={submit}>
+            <form
+                className="research-controls"
+                autoComplete="off"
+                onSubmit={submit}
+            >
                 <label>
                     <span>指數家族</span>
                     <select

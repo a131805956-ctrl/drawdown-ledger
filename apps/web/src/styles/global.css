@@ -30,6 +30,7 @@ textarea {
 button,
 a {
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
 }
 
 a {
@@ -66,6 +67,8 @@ h1,
 h2,
 h3 {
     font-family: var(--font-display);
+    scroll-margin-top: var(--space-6);
+    text-wrap: balance;
 }
 
 .skip-link {
@@ -1861,7 +1864,7 @@ time {
 
 @media (max-width: 720px) {
     body {
-        padding-bottom: 68px;
+        padding-bottom: calc(68px + env(safe-area-inset-bottom));
     }
 
     .app-shell {
@@ -1877,8 +1880,8 @@ time {
         z-index: 30;
         display: block;
         width: auto;
-        height: 68px;
-        padding: 0;
+        height: calc(68px + env(safe-area-inset-bottom));
+        padding: 0 0 env(safe-area-inset-bottom);
         border-top: 1px solid #41536b;
         border-right: 0;
     }

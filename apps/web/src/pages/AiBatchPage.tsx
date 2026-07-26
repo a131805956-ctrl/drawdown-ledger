@@ -380,7 +380,11 @@ export function AiBatchPage() {
                 </p>
             ) : null}
 
-            <form className="optimizer-form" onSubmit={submit}>
+            <form
+                className="optimizer-form"
+                autoComplete="off"
+                onSubmit={submit}
+            >
                 <section className="optimizer-panel">
                     <div className="optimizer-panel__heading">
                         <span>UNIVERSE</span>
@@ -482,7 +486,7 @@ export function AiBatchPage() {
                                 onChange={(event) =>
                                     setDepths(event.currentTarget.value)
                                 }
-                                placeholder="20, 30, 40"
+                                placeholder="例如 20, 30, 40…"
                             />
                         </label>
                         <label>

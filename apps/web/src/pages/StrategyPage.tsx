@@ -347,7 +347,11 @@ export function StrategyPage() {
                 </p>
             </header>
 
-            <form className="strategy-form" onSubmit={submit}>
+            <form
+                className="strategy-form"
+                autoComplete="off"
+                onSubmit={submit}
+            >
                 <section
                     className="form-section"
                     aria-labelledby="strategy-universe"
