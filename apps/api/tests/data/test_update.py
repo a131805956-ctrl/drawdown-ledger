@@ -169,4 +169,4 @@ def test_blank_catalog_uses_all_approved_registry_symbols(tmp_path: Path) -> Non
     approved = set(required_market_symbols())
     assert result.request_count == len(approved)
     assert {symbol for symbol, _, _ in provider.calls} == approved
-    assert "^TWII" in approved
+    assert {"^TWII", "^NDX", "^GSPC", "^DJI", "^RUT"} <= approved

@@ -64,7 +64,11 @@ def test_hidden_prototype_is_healthy_but_not_user_selectable(tmp_path: Path) -> 
     assert len(instrument_symbols) == 16
     assert "^TWII" not in instrument_symbols
     assert coverage_by_symbol["^TWII"]["roles"] == ["prototype"]
-    assert coverage_by_symbol["QQQ"]["roles"] == ["tradable", "prototype"]
+    assert coverage_by_symbol["^NDX"]["roles"] == ["prototype"]
+    assert coverage_by_symbol["QQQ"]["roles"] == [
+        "tradable",
+        "prototype_proxy",
+    ]
 
 
 def test_unconfigured_data_update_is_typed_and_never_calls_yahoo(tmp_path: Path) -> None:

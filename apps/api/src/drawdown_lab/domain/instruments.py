@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
-MarketSymbolRole = Literal["tradable", "prototype"]
+MarketSymbolRole = Literal["tradable", "prototype", "prototype_proxy"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,12 +200,15 @@ def market_symbol_roles() -> dict[str, tuple[MarketSymbolRole, ...]]:
     for family in INSTRUMENT_FAMILIES:
         for instrument in family.instruments:
             roles_by_symbol.setdefault(instrument.symbol, []).append("tradable")
-            prototype_roles = roles_by_symbol.setdefault(
-                instrument.prototype_symbol,
-                [],
-            )
-            if "prototype" not in prototype_roles:
-                prototype_roles.append("prototype")
+        primary_roles = roles_by_symbol.setdefault(family.benchmark_symbol, [])
+        if "prototype" not in primary_roles:
+            primary_roles.append("prototype")
+        for instrument in family.instruments:
+            if instrument.prototype_symbol == family.benchmark_symbol:
+                continue
+            proxy_roles = roles_by_symbol.setdefault(instrument.prototype_symbol, [])
+            if "prototype_proxy" not in proxy_roles:
+                proxy_roles.append("prototype_proxy")
     return {
         symbol: tuple(roles)
         for symbol, roles in roles_by_symbol.items()
