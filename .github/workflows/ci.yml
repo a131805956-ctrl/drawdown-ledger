@@ -116,12 +116,17 @@ jobs:
       - name: Install Pester
         shell: pwsh
         run: Install-Module Pester -MinimumVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
-      - name: Run lifecycle and publication tests
+      - name: Run lifecycle tests with Windows PowerShell
+        shell: powershell
+        run: |
+          $result = Invoke-Pester -Script '.\tests\powershell\*.Tests.ps1' -PassThru
+          if ($result.FailedCount -gt 0) {
+            exit 1
+          }
+      - name: Run publication tests with Pester 5
         shell: pwsh
         run: |
-          $paths = @('tests/powershell', 'scripts/tests') |
-            Where-Object { Test-Path -LiteralPath $_ -PathType Container }
-          $result = Invoke-Pester -Path $paths -PassThru
+          $result = Invoke-Pester -Path '.\scripts\tests\Publish-Report.Tests.ps1' -PassThru
           if ($result.FailedCount -gt 0) {
             exit 1
           }
