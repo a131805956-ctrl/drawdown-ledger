@@ -333,7 +333,7 @@ def historical_request_from_payload(
             contribution_day=int(strategy["contribution_day"]),
             contribution_events=tuple(
                 ContributionEvent(
-                    month=date.fromisoformat(str(event["month"])).replace(day=1),
+                    month=date.fromisoformat(str(event["month"])),
                     kind=cast(
                         Literal["bonus", "override", "pause", "resume"],
                         str(event["kind"]),
