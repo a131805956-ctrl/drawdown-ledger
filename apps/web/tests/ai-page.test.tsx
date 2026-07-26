@@ -3,7 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import { App } from "../src/app/App";
-import { createStaticResearchApi } from "../src/lib/api";
+import {
+    createStaticResearchApi,
+    ResearchApiError,
+} from "../src/lib/api";
 import { MemoryRouter } from "../src/lib/router";
 import type {
     JobResponse,
@@ -127,7 +130,7 @@ function optimizationApi() {
         },
         health: {
             schema_version: "1.0",
-            status: "healthy",
+            status: "incomplete",
             coverage: [],
         },
     });
@@ -318,9 +321,10 @@ describe("AI-operable optimization workbench", () => {
                 ratio_search: {
                     minimum_basis_points: 0,
                     maximum_basis_points: 10000,
-                    step_basis_points: 1000,
+                    step_basis_points: 5000,
                     monotone: true,
                 },
+                max_candidates: 100,
                 walk_forward: {
                     n_splits: 3,
                     minimum_train_independent_episodes: 1,
@@ -337,5 +341,39 @@ describe("AI-operable optimization workbench", () => {
         expect(
             screen.getByRole("button", { name: "複製 AI 操作說明" }),
         ).toHaveAttribute("data-ai-action", "copy-ai-instructions");
+        expect(
+            screen.getByText(
+                "快速初掃：預設 50% 步長、最多 100 候選；可改 25 或 10 做精細分析。",
+            ),
+        ).toBeVisible();
+    });
+
+    it("shows the API detail when a new optimization cannot be created", async () => {
+        const user = userEvent.setup();
+        const api = optimizationApi();
+        api.createOptimization.mockRejectedValue(
+            new ResearchApiError(
+                "Request failed with status 404",
+                404,
+                "Trusted cache is missing prototype series: ^NDX, TQQQ",
+            ),
+        );
+        render(
+            <MemoryRouter initialEntries={["/ai"]}>
+                <App api={api} capability={{ mode: "live" }} />
+            </MemoryRouter>,
+        );
+
+        await user.click(
+            screen.getByRole("button", {
+                name: "開始窮舉分析",
+            }),
+        );
+
+        expect(
+            await screen.findByText(
+                "Trusted cache is missing prototype series: ^NDX, TQQQ",
+            ),
+        ).toBeVisible();
     });
 });

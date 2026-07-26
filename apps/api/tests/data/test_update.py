@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from drawdown_lab.data.catalog import DataCatalog
 from drawdown_lab.data.models import MarketFrame
-from drawdown_lab.data.update import DataUpdateError, UpdateCoordinator
+from drawdown_lab.data.update import UpdateCoordinator
 from drawdown_lab.domain.instruments import required_market_symbols
 
 
@@ -40,6 +40,19 @@ class RecordingProvider:
 class FailingProvider:
     def fetch(self, symbol: str, start: date, end: date) -> MarketFrame:
         raise RuntimeError("Yahoo is unavailable")
+
+
+class SelectiveFailingProvider:
+    def __init__(self, frame: MarketFrame, failing_symbols: set[str]) -> None:
+        self.frame = frame
+        self.failing_symbols = failing_symbols
+        self.calls: list[tuple[str, date, date]] = []
+
+    def fetch(self, symbol: str, start: date, end: date) -> MarketFrame:
+        self.calls.append((symbol, start, end))
+        if symbol in self.failing_symbols:
+            raise RuntimeError("rate limited")
+        return self.frame
 
 
 class MetadataFailingCatalog(DataCatalog):
@@ -128,12 +141,43 @@ def test_failed_refresh_keeps_last_valid_parquet(tmp_path: Path) -> None:
     original = catalog.path_for("QQQ")
     original_bytes = original.read_bytes()
 
-    with pytest.raises(DataUpdateError):
-        UpdateCoordinator(FailingProvider(), catalog, symbols=("QQQ",)).ensure_current(
-            date(2026, 8, 15)
-        )
+    result = UpdateCoordinator(
+        FailingProvider(), catalog, symbols=("QQQ",)
+    ).ensure_current(date(2026, 8, 15))
 
+    assert result.status == "failed"
+    assert result.request_count == 1
+    assert result.refreshed_symbols == ()
+    assert result.failures[0].symbol == "QQQ"
+    assert result.failures[0].message == "Yahoo is unavailable"
     assert original_bytes == catalog.path_for("QQQ").read_bytes()
+
+
+def test_failed_symbol_does_not_prevent_later_symbols_from_refreshing(
+    tmp_path: Path,
+) -> None:
+    catalog = DataCatalog(tmp_path)
+    provider = SelectiveFailingProvider(
+        market_frame_through("2026-07-31"),
+        failing_symbols={"SPY"},
+    )
+
+    result = UpdateCoordinator(
+        provider,
+        catalog,
+        symbols=("QQQ", "SPY", "DIA"),
+    ).ensure_current(date(2026, 8, 15))
+
+    assert result.status == "partial"
+    assert result.request_count == 3
+    assert result.refreshed_symbols == ("QQQ", "DIA")
+    assert [(failure.symbol, failure.message) for failure in result.failures] == [
+        ("SPY", "rate limited")
+    ]
+    assert [symbol for symbol, _, _ in provider.calls] == ["QQQ", "SPY", "DIA"]
+    assert catalog.policy_cutoff("QQQ") == date(2026, 7, 31)
+    assert catalog.policy_cutoff("SPY") is None
+    assert catalog.policy_cutoff("DIA") == date(2026, 7, 31)
 
 
 def test_refreshes_with_five_cached_session_overlap(tmp_path: Path) -> None:
@@ -157,11 +201,13 @@ def test_invalid_refresh_does_not_replace_cache(tmp_path: Path) -> None:
         columns=["split_ratio"]
     )
 
-    with pytest.raises(DataUpdateError, match="split_ratio"):
-        UpdateCoordinator(
-            RecordingProvider(MarketFrame(invalid)), catalog, symbols=("QQQ",)
-        ).ensure_current(date(2026, 8, 15))
+    result = UpdateCoordinator(
+        RecordingProvider(MarketFrame(invalid)), catalog, symbols=("QQQ",)
+    ).ensure_current(date(2026, 8, 15))
 
+    assert result.status == "failed"
+    assert result.failures[0].symbol == "QQQ"
+    assert "split_ratio" in result.failures[0].message
     assert original_bytes == catalog.path_for("QQQ").read_bytes()
 
 

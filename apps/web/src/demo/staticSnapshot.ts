@@ -343,7 +343,7 @@ export const staticResearchSnapshot: StaticResearchSnapshot = {
     },
     health: {
         schema_version: "1.0",
-        status: "healthy",
+        status: "ready",
         coverage: [...rolesBySymbol].map(([symbol, roles]) => ({
             symbol,
             cached: true,

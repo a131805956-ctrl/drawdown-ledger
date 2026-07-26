@@ -27,12 +27,17 @@ function Invoke-DrawdownDataUpdate {
         -Method Post `
         -ContentType 'application/json; charset=utf-8' `
         -Body $body
+    $failures = @($response.failures)
     return [pscustomobject]@{
         SchemaVersion = [string]$response.schema_version
         Status = [string]$response.status
         Cutoff = $response.cutoff
         RequestCount = [int]$response.request_count
         RefreshedSymbols = @($response.refreshed_symbols)
+        FailureCount = $failures.Count
+        FailedSymbols = @(
+            $failures | ForEach-Object { [string]$_.symbol }
+        )
     }
 }
 

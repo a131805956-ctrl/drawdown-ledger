@@ -21,6 +21,7 @@ from drawdown_lab.api.schemas import (
     ChartSeriesResponse,
     DataCoverageResponse,
     DataHealthResponse,
+    DataUpdateFailureResponse,
     DataUpdateRequest,
     DataUpdateResponse,
     EpisodeTraceResponse,
@@ -49,8 +50,9 @@ from drawdown_lab.api.schemas import (
     TradeResponse,
 )
 from drawdown_lab.data.catalog import DataCatalog, DataIntegrityError
+from drawdown_lab.data.cutoff import policy_cutoff
 from drawdown_lab.data.models import MarketFrame
-from drawdown_lab.data.update import UpdateCoordinator
+from drawdown_lab.data.update import DataUpdateError, UpdateCoordinator
 from drawdown_lab.domain.instruments import (
     INSTRUMENT_FAMILIES,
     Instrument,
@@ -153,18 +155,23 @@ def create_router(
     @router.get("/data/health", response_model=DataHealthResponse)
     def data_health() -> DataHealthResponse:
         symbols = market_symbol_roles()
+        coverage = tuple(
+            DataCoverageResponse(
+                symbol=symbol,
+                roles=roles,
+                cached=data_catalog.read(symbol) is not None,
+                actual_last_session=data_catalog.actual_last_session(symbol),
+                policy_cutoff=data_catalog.policy_cutoff(symbol),
+            )
+            for symbol, roles in symbols.items()
+        )
         return DataHealthResponse(
-            status="healthy",
-            coverage=tuple(
-                DataCoverageResponse(
-                    symbol=symbol,
-                    roles=roles,
-                    cached=data_catalog.read(symbol) is not None,
-                    actual_last_session=data_catalog.actual_last_session(symbol),
-                    policy_cutoff=data_catalog.policy_cutoff(symbol),
-                )
-                for symbol, roles in symbols.items()
+            status=(
+                "ready"
+                if coverage and all(item.cached for item in coverage)
+                else "incomplete"
             ),
+            coverage=coverage,
         )
 
     @router.post("/data/update", response_model=DataUpdateResponse)
@@ -175,14 +182,37 @@ def create_router(
                 cutoff=None,
                 request_count=0,
                 refreshed_symbols=(),
+                failures=(),
                 message="No market-data provider is configured.",
             )
-        summary = update_coordinator.ensure_current(request.as_of)
+        try:
+            summary = update_coordinator.ensure_current(request.as_of)
+        except DataUpdateError as error:
+            return DataUpdateResponse(
+                status="failed",
+                cutoff=policy_cutoff(request.as_of),
+                request_count=0,
+                refreshed_symbols=(),
+                failures=(
+                    DataUpdateFailureResponse(
+                        symbol="__batch__",
+                        message=str(error).strip() or type(error).__name__,
+                    ),
+                ),
+                message="Data update failed.",
+            )
         return DataUpdateResponse(
-            status="completed",
+            status=summary.status,
             cutoff=summary.cutoff,
             request_count=summary.request_count,
             refreshed_symbols=summary.refreshed_symbols,
+            failures=tuple(
+                DataUpdateFailureResponse(
+                    symbol=failure.symbol,
+                    message=failure.message,
+                )
+                for failure in summary.failures
+            ),
         )
 
     @router.post("/evidence/analyze", response_model=EvidenceAnalyzeResponse)

@@ -19,17 +19,30 @@ function Invoke-StartupDataUpdate {
 
     try {
         $summary = & $UpdateAction
+        $status = [string]$summary.Status
+        $degraded = $status -in @('partial', 'failed')
+        $message = switch ($status) {
+            'partial' {
+                'Data update partially completed; continuing with available cache.'
+            }
+            'failed' {
+                'Data update failed; continuing with the existing cache.'
+            }
+            default {
+                'Data update completed.'
+            }
+        }
         return [pscustomobject]@{
-            Status = [string]$summary.Status
-            Degraded = $false
+            Status = $status
+            Degraded = $degraded
             ExitPolicy = 'continue-running'
-            Message = 'Data update completed.'
+            Message = $message
             Summary = $summary
         }
     }
     catch {
         return [pscustomobject]@{
-            Status = 'stale-cache'
+            Status = 'failed'
             Degraded = $true
             ExitPolicy = 'continue-running'
             Message = 'Data update failed; continuing with the existing cache.'

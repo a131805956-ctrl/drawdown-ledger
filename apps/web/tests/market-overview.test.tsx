@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import { App } from "../src/app/App";
@@ -49,7 +50,7 @@ const overview: MarketOverviewResponse = {
 
 const health: DataHealthResponse = {
     schema_version: "1.0",
-    status: "healthy",
+    status: "incomplete",
     coverage: [
         {
             symbol: "QQQ",
@@ -159,13 +160,17 @@ describe("market overview route", () => {
 });
 
 describe("data health route", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("distinguishes the policy cutoff from the observed session", async () => {
         renderPath(
             "/data-health",
             apiWith({
                 health: {
                     schema_version: "1.0",
-                    status: "healthy",
+                    status: "ready",
                     coverage: [
                         {
                             symbol: "QQQ",
@@ -196,7 +201,7 @@ describe("data health route", () => {
             apiWith({
                 health: {
                     schema_version: "1.0",
-                    status: "healthy",
+                    status: "incomplete",
                     coverage: [
                         {
                             symbol: "QQQ",
@@ -252,5 +257,161 @@ describe("data health route", () => {
         });
         expect(status).toHaveClass("is-error");
         expect(status).toHaveTextContent("檢查 API 服務");
+    });
+
+    it("labels an empty live cache as not ready instead of merely API available", async () => {
+        renderPath(
+            "/",
+            apiWith({
+                health: {
+                    schema_version: "1.0",
+                    status: "incomplete",
+                    coverage: [
+                        {
+                            symbol: "QQQ",
+                            cached: false,
+                            actual_last_session: null,
+                            policy_cutoff: null,
+                            roles: ["tradable", "prototype_proxy"],
+                        },
+                        {
+                            symbol: "^NDX",
+                            cached: false,
+                            actual_last_session: null,
+                            policy_cutoff: null,
+                            roles: ["prototype"],
+                        },
+                    ],
+                },
+            }),
+        );
+
+        const status = await screen.findByRole("link", {
+            name: "本機資料未就緒，0 / 2 符合截止",
+        });
+        expect(status).toHaveClass("is-warning");
+        expect(status).toHaveTextContent("資料未就緒");
+        expect(status).toHaveTextContent("0 / 2 符合截止");
+    });
+
+    it("updates live data to the required cutoff and refetches health and overview", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-07-26T04:00:00.000Z"));
+        const user = userEvent.setup();
+        const initialHealth: DataHealthResponse = {
+            schema_version: "1.0",
+            status: "incomplete",
+            coverage: [
+                {
+                    symbol: "QQQ",
+                    cached: false,
+                    actual_last_session: null,
+                    policy_cutoff: null,
+                    roles: ["tradable", "prototype_proxy"],
+                },
+                {
+                    symbol: "^NDX",
+                    cached: false,
+                    actual_last_session: null,
+                    policy_cutoff: null,
+                    roles: ["prototype"],
+                },
+            ],
+        };
+        const updatedHealth: DataHealthResponse = {
+            schema_version: "1.0",
+            status: "ready",
+            coverage: initialHealth.coverage.map((row) => ({
+                ...row,
+                cached: true,
+                actual_last_session: "2026-06-30",
+                policy_cutoff: "2026-06-30",
+            })),
+        };
+        const api = apiWith({ health: initialHealth });
+        api.getDataHealth = vi
+            .fn()
+            .mockResolvedValueOnce(initialHealth)
+            .mockResolvedValue(updatedHealth);
+        api.getMarketOverview = vi.fn().mockResolvedValue(overview);
+        const updateData = vi.fn().mockResolvedValue({
+            schema_version: "1.0" as const,
+            status: "completed" as const,
+            cutoff: "2026-06-30",
+            request_count: 2,
+            refreshed_symbols: ["QQQ", "^NDX"],
+            message: null,
+        });
+        Object.assign(api, { updateData });
+
+        renderPath("/data-health", api);
+
+        await user.click(
+            await screen.findByRole("button", {
+                name: "一鍵更新至 2026-06-30",
+            }),
+        );
+
+        expect(updateData).toHaveBeenCalledWith("2026-07-26");
+        expect(await screen.findByText("更新完成")).toBeVisible();
+        expect(screen.getByText("QQQ、^NDX")).toBeVisible();
+        expect(screen.getByText("2 / 2")).toBeVisible();
+        expect(api.getDataHealth).toHaveBeenCalledTimes(2);
+        expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the provider detail under per-symbol update errors", async () => {
+        const user = userEvent.setup();
+        const api = apiWith();
+        Object.assign(api, {
+            updateData: vi.fn().mockResolvedValue({
+                schema_version: "1.0" as const,
+                status: "partial" as const,
+                cutoff: "2026-06-30",
+                request_count: 2,
+                refreshed_symbols: ["^NDX"],
+                failures: [
+                    {
+                        symbol: "QQQ",
+                        message: "Yahoo 暫時拒絕連線；舊快取已保留。",
+                    },
+                ],
+                message: "部分標的更新失敗。",
+            }),
+        });
+
+        renderPath("/data-health", api);
+
+        await user.click(
+            await screen.findByRole("button", {
+                name: /一鍵更新至/,
+            }),
+        );
+
+        expect(
+            await screen.findByRole("heading", {
+                name: "逐標的錯誤",
+            }),
+        ).toBeVisible();
+        expect(
+            screen.getByText("QQQ：Yahoo 暫時拒絕連線；舊快取已保留。"),
+        ).toBeVisible();
+    });
+
+    it("marks Pages as view-only and links to the live application", async () => {
+        renderPath(
+            "/",
+            apiWith(),
+            { mode: "static", dataDate: "2026-07-31" },
+        );
+
+        const liveLink = await screen.findByRole("link", {
+            name: "靜態備援資料狀態，只能檢視；資料日 2026-07-31；開啟 Live 服務",
+        });
+        expect(liveLink).toHaveTextContent("只能檢視");
+        expect(liveLink).toHaveAttribute(
+            "href",
+            "https://desktop-loi23mp.tail9c076e.ts.net/drawdown-ledger/",
+        );
     });
 });

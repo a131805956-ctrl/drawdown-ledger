@@ -43,17 +43,17 @@ def adjusted_open(row: pd.Series) -> Decimal | None:
 
 def first_later_valid_entry(data: pd.DataFrame, signal_date: date) -> Entry | None:
     signal_timestamp = pd.Timestamp(signal_date)
-    for position, (timestamp, row) in enumerate(data.iterrows()):
-        session_timestamp = cast(pd.Timestamp, timestamp)
-        if session_timestamp <= signal_timestamp:
-            continue
-        price = adjusted_open(row)
+    position = int(data.index.searchsorted(signal_timestamp, side="right"))
+    while position < len(data):
+        price = adjusted_open(data.iloc[position])
         if price is not None:
+            session_timestamp = cast(pd.Timestamp, data.index[position])
             return Entry(
                 position=position,
                 entry_date=session_timestamp.date(),
                 adjusted_open=price,
             )
+        position += 1
     return None
 
 

@@ -1,8 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
+import {
+    useMutation,
+    useQuery,
+    useQueryClient,
+} from "@tanstack/react-query";
 
 import { RouteState } from "../components/RouteState";
-import { useResearchData } from "../lib/api";
-import { requiredPolicyCutoff } from "../lib/calendar";
+import {
+    researchApiErrorDetails,
+    researchApiErrorMessage,
+    useResearchData,
+} from "../lib/api";
+import {
+    researchAsOfDate,
+    requiredPolicyCutoff,
+} from "../lib/calendar";
 import type { DataCoverage } from "../lib/contracts";
 
 type CoverageJudgement =
@@ -28,9 +39,29 @@ function coverageJudgement(
 
 export function DataHealthPage() {
     const { api, capability } = useResearchData();
+    const queryClient = useQueryClient();
+    const requiredCutoff = requiredPolicyCutoff(capability);
+    const updateAsOf = researchAsOfDate();
     const healthQuery = useQuery({
         queryKey: ["data-health"],
         queryFn: api.getDataHealth,
+    });
+    const updateMutation = useMutation({
+        mutationFn: () => api.updateData(updateAsOf),
+        onSuccess: async (result) => {
+            if (
+                result.status === "failed" ||
+                result.status === "not_configured"
+            ) {
+                return;
+            }
+            const [health, overview] = await Promise.all([
+                api.getDataHealth(),
+                api.getMarketOverview(),
+            ]);
+            queryClient.setQueryData(["data-health"], health);
+            queryClient.setQueryData(["market-overview"], overview);
+        },
     });
 
     if (healthQuery.isPending) {
@@ -48,7 +79,10 @@ export function DataHealthPage() {
             <RouteState
                 kind="error"
                 title="無法讀取資料健康度"
-                message="確認本機 API 已啟動，或切換到已發布的靜態資料集。"
+                message={researchApiErrorMessage(
+                    healthQuery.error,
+                    "確認本機 API 已啟動，或切換到已發布的靜態資料集。",
+                )}
                 actionLabel="重新檢查資料"
                 onAction={() => {
                     void healthQuery.refetch();
@@ -58,7 +92,6 @@ export function DataHealthPage() {
     }
 
     const rows = healthQuery.data.coverage;
-    const requiredCutoff = requiredPolicyCutoff(capability);
     const compliantCount = rows.filter(
         (row) =>
             coverageJudgement(row, requiredCutoff) ===
@@ -76,6 +109,109 @@ export function DataHealthPage() {
                     政策截止日與實際最後交易日分開顯示；缺少快取時，不假裝資料已更新。
                 </p>
             </header>
+
+            {capability.mode === "live" ? (
+                <section
+                    className="data-update-panel"
+                    aria-labelledby="data-update-heading"
+                >
+                    <div>
+                        <p className="eyebrow">Live data refresh</p>
+                        <h2 id="data-update-heading">
+                            更新至要求截止日
+                        </h2>
+                        <p>
+                            以 {updateAsOf} 為基準，補齊本機快取至{" "}
+                            <strong>{requiredCutoff}</strong>。既有快取會保留到新資料驗證完成。
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        className="primary-action"
+                        disabled={updateMutation.isPending}
+                        onClick={() => {
+                            updateMutation.mutate();
+                        }}
+                    >
+                        {updateMutation.isPending
+                            ? "正在更新市場資料…"
+                            : `一鍵更新至 ${requiredCutoff}`}
+                    </button>
+                    {updateMutation.data?.status === "completed" ||
+                    updateMutation.data?.status === "partial" ? (
+                        <div
+                            className="data-update-result"
+                            role="status"
+                        >
+                            <strong>
+                                {updateMutation.data.status === "completed"
+                                    ? "更新完成"
+                                    : "部分更新完成"}
+                            </strong>
+                            <span>
+                                截止{" "}
+                                {updateMutation.data.cutoff ??
+                                    requiredCutoff}
+                                ，共送出{" "}
+                                {updateMutation.data.request_count} 次資料請求。
+                            </span>
+                            <span>
+                                {updateMutation.data.refreshed_symbols
+                                    .length > 0
+                                    ? updateMutation.data.refreshed_symbols.join(
+                                          "、",
+                                      )
+                                    : "所有序列原本已符合截止。"}
+                            </span>
+                        </div>
+                    ) : null}
+                    {updateMutation.data?.status === "not_configured" ? (
+                        <div className="inline-alert" role="alert">
+                            <strong>市場資料更新服務尚未設定</strong>
+                            <span>
+                                {updateMutation.data.message ??
+                                    "請從 Live 服務執行資料更新。"}
+                            </span>
+                        </div>
+                    ) : null}
+                    {updateMutation.data?.status === "failed" ? (
+                        <div className="inline-alert" role="alert">
+                            <strong>市場資料更新失敗</strong>
+                            <span>
+                                {updateMutation.data.message ??
+                                    "舊快取已保留，請查看逐標的錯誤。"}
+                            </span>
+                        </div>
+                    ) : null}
+                    {(updateMutation.data?.failures?.length ?? 0) > 0 ||
+                    updateMutation.isError ? (
+                        <div
+                            className="data-update-errors"
+                            role="alert"
+                        >
+                            <h3>逐標的錯誤</h3>
+                            <ul>
+                                {updateMutation.data?.failures?.map(
+                                    (failure) => (
+                                        <li key={failure.symbol}>
+                                            {failure.symbol}：
+                                            {failure.message}
+                                        </li>
+                                    ),
+                                )}
+                                {updateMutation.isError
+                                    ? researchApiErrorDetails(
+                                          updateMutation.error,
+                                          "市場資料更新失敗；舊快取已保留。",
+                                      ).map((detail) => (
+                                          <li key={detail}>{detail}</li>
+                                      ))
+                                    : null}
+                            </ul>
+                        </div>
+                    ) : null}
+                </section>
+            ) : null}
 
             {rows.length === 0 ? (
                 <RouteState

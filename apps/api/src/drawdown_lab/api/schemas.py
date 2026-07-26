@@ -82,7 +82,7 @@ class DataCoverageResponse(ApiModel):
 
 
 class DataHealthResponse(VersionedModel):
-    status: Literal["healthy"]
+    status: Literal["ready", "incomplete"]
     coverage: tuple[DataCoverageResponse, ...]
 
 
@@ -90,11 +90,17 @@ class DataUpdateRequest(VersionedModel):
     as_of: date
 
 
+class DataUpdateFailureResponse(ApiModel):
+    symbol: str
+    message: str
+
+
 class DataUpdateResponse(VersionedModel):
-    status: Literal["completed", "not_configured"]
+    status: Literal["completed", "partial", "failed", "not_configured"]
     cutoff: date | None
     request_count: int
     refreshed_symbols: tuple[str, ...]
+    failures: tuple[DataUpdateFailureResponse, ...] = ()
     message: str | None = None
 
 

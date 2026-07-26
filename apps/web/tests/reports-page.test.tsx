@@ -119,7 +119,7 @@ describe("report and comparison ledger", () => {
             },
             health: {
                 schema_version: "1.0",
-                status: "healthy",
+                status: "incomplete",
                 coverage: [],
             },
             results,
@@ -215,7 +215,7 @@ describe("report and comparison ledger", () => {
                 },
                 health: {
                     schema_version: "1.0",
-                    status: "healthy",
+                    status: "incomplete",
                     coverage: [],
                 },
                 results,

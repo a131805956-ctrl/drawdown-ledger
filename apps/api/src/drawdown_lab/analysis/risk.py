@@ -43,16 +43,16 @@ def block_bootstrap_interval(
 
     sample_size = observations.size
     effective_block_size = min(block_size, sample_size)
-    estimates = np.empty(iterations, dtype=float)
-    for iteration in range(iterations):
-        sample: list[float] = []
-        while len(sample) < sample_size:
-            start = int(rng.integers(0, sample_size))
-            sample.extend(
-                float(observations[(start + offset) % sample_size])
-                for offset in range(effective_block_size)
-            )
-        estimates[iteration] = float(np.mean(sample[:sample_size]))
+    blocks_per_sample = ceil(sample_size / effective_block_size)
+    starts = rng.integers(
+        0,
+        sample_size,
+        size=(iterations, blocks_per_sample),
+    )
+    offsets = np.arange(effective_block_size, dtype=np.int64)
+    indices = (starts[..., np.newaxis] + offsets) % sample_size
+    samples = observations[indices].reshape(iterations, -1)[:, :sample_size]
+    estimates = samples.mean(axis=1)
 
     tail = (1.0 - confidence) / 2.0
     lower, upper = np.quantile(estimates, (tail, 1.0 - tail))

@@ -12,6 +12,7 @@ import {
 
 import type {
     DataHealthResponse,
+    DataUpdateResponse,
     EvidenceAnalyzeRequest,
     EvidenceAnalyzeResponse,
     ErrorResponse,
@@ -39,6 +40,7 @@ export interface ResearchApi {
     getInstruments(this: void): Promise<InstrumentListResponse>;
     getMarketOverview(this: void): Promise<MarketOverviewResponse>;
     getDataHealth(this: void): Promise<DataHealthResponse>;
+    updateData(this: void, asOf: string): Promise<DataUpdateResponse>;
     getMarketSeries(
         this: void,
         query: MarketSeriesQuery,
@@ -101,6 +103,32 @@ export class ResearchApiError extends Error {
         this.status = status;
         this.detail = detail;
     }
+}
+
+export function researchApiErrorDetails(
+    error: unknown,
+    fallback: string,
+): string[] {
+    if (!(error instanceof ResearchApiError) || error.detail === null) {
+        return [fallback];
+    }
+    if (typeof error.detail === "string") {
+        const detail = error.detail.trim();
+        return detail.length > 0 ? [detail] : [fallback];
+    }
+    if (error.detail.length === 0) {
+        return [fallback];
+    }
+    return error.detail.map(
+        (issue) => `${issue.loc.join(".")}：${issue.msg}`,
+    );
+}
+
+export function researchApiErrorMessage(
+    error: unknown,
+    fallback: string,
+): string {
+    return researchApiErrorDetails(error, fallback).join("；");
 }
 
 async function requestJson<T>(
@@ -184,6 +212,15 @@ export function createLiveResearchApi(
                 fetcher,
                 `${baseUrl}/data/health`,
             ),
+        updateData: (asOf) =>
+            jsonRequest<DataUpdateResponse>(
+                fetcher,
+                `${baseUrl}/data/update`,
+                {
+                    schema_version: "1.0",
+                    as_of: asOf,
+                },
+            ),
         getMarketSeries: (query) =>
             requestJson<MarketSeriesResponse>(
                 fetcher,
@@ -252,7 +289,7 @@ const emptyStaticSnapshot: StaticResearchSnapshot = {
     },
     health: {
         schema_version: "1.0",
-        status: "healthy",
+        status: "incomplete",
         coverage: [],
     },
     results: { schema_version: "1.0", results: [] },
@@ -286,6 +323,8 @@ export function createStaticResearchApi(
         getInstruments: () => Promise.resolve(snapshot.instruments),
         getMarketOverview: () => Promise.resolve(snapshot.overview),
         getDataHealth: () => Promise.resolve(snapshot.health),
+        updateData: () =>
+            unavailableInStaticMode("Market data update"),
         getMarketSeries: (query) =>
             snapshot.marketSeries === undefined
                 ? unavailableInStaticMode("Market series")
