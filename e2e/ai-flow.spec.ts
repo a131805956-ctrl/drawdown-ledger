@@ -7,7 +7,7 @@ test("AI mode exposes deterministic controls and completes a grid search", async
 }) => {
     const api = await installResearchApiMocks(page);
 
-    await page.goto("/ai");
+    await page.goto("ai");
     const runButton = page.getByRole("button", {
         name: "開始窮舉分析",
     });

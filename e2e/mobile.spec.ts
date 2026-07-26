@@ -15,7 +15,7 @@ for (const viewport of viewports) {
         await page.emulateMedia({ reducedMotion: "reduce" });
         await installResearchApiMocks(page);
 
-        await page.goto("/evidence");
+        await page.goto("evidence");
         await page.keyboard.press("Tab");
         await expect(page.getByRole("link", { name: "跳至主要內容" }))
             .toBeFocused();

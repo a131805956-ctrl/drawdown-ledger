@@ -1,7 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = 4173;
-const baseURL = `http://127.0.0.1:${port}`;
+const serverPort = 41873;
+const publicBase = "/drawdown-ledger/";
+const baseURL = `http://127.0.0.1:${serverPort}${publicBase}`;
 
 export default defineConfig({
     testDir: "./e2e",
@@ -24,12 +25,13 @@ export default defineConfig({
     },
     webServer: {
         command:
-            "npm --prefix apps/web run dev -- --host 127.0.0.1 --port 4173",
+            `npm --prefix apps/web run build && node e2e/fixtures/mountedSpaServer.mjs ${String(serverPort)} ${publicBase} apps/web/dist`,
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
         env: {
             VITE_DATA_MODE: "live",
+            VITE_PUBLIC_BASE: publicBase,
         },
     },
     projects: [

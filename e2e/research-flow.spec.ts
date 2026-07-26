@@ -7,7 +7,7 @@ test("researcher can inspect evidence and run a cash-pool strategy", async ({
 }, testInfo) => {
     const api = await installResearchApiMocks(page);
 
-    await page.goto("/");
+    await page.goto(".");
     await expect(
         page.getByRole("heading", { name: "市場總覽" }),
     ).toBeVisible();
@@ -81,7 +81,7 @@ test("researcher can inspect evidence and run a cash-pool strategy", async ({
 test("deep links survive a direct load", async ({ page }) => {
     await installResearchApiMocks(page);
 
-    await page.goto("/evidence");
+    await page.goto("evidence");
     await expect(
         page.getByRole("heading", { name: "歷史證據" }),
     ).toBeVisible();
