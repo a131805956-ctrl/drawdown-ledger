@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal, Self, cast
 
@@ -29,6 +29,7 @@ from drawdown_lab.optimization.scoring import (
     OptimizationRequest,
     ProfileConstraints,
 )
+from drawdown_lab.reports.models import ExportManifest
 from drawdown_lab.storage.jobs import JobRecord, ReportRecord, ResultRecord
 
 SCHEMA_VERSION: Literal["1.0"] = "1.0"
@@ -732,10 +733,108 @@ class ResultListResponse(VersionedModel):
     results: tuple[ResultResponse, ...]
 
 
+ReportFormat = Literal["html", "json", "csv"]
+
+
+class ReportExportRequest(VersionedModel):
+    result_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    formats: tuple[ReportFormat, ...] = Field(
+        default=("html", "json", "csv"),
+        description=(
+            "Requested views. A canonical JSON artifact is always included "
+            "to make every bundle independently verifiable."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_export(self) -> Self:
+        if ".." in self.result_id:
+            raise ValueError("result_id contains unsafe characters")
+        if not self.formats:
+            raise ValueError("At least one report format is required")
+        if len(set(self.formats)) != len(self.formats):
+            raise ValueError("Report formats must be unique")
+        return self
+
+
+class ReportArtifactResponse(ApiModel):
+    relative_path: str
+    media_type: str
+    sha256: str
+    size_bytes: int
+
+
+class ReportDataLineageResponse(ApiModel):
+    provider: str
+    fetched_at: datetime
+    sha256: str
+    policy_cutoff: date
+    actual_session_cutoff: date
+    classification: Literal["actual", "synthetic"]
+
+
+class ReportLineageResponse(ApiModel):
+    engine_version: str
+    git_commit: str
+    code_state: Literal["clean", "dirty", "injected"]
+    data_hashes: dict[str, str]
+    data_lineage: dict[str, ReportDataLineageResponse]
+    policy_cutoff: date
+    actual_session_cutoff: date
+    result_sha256: str
+    generated_at: datetime
+    timezone: str
+    parameters: dict[str, object]
+    parameters_sha256: str
+    analysis_boundary: dict[str, str]
+    assumptions: tuple[str, ...]
+    limitations: tuple[str, ...]
+
+
+class ReportExportResponse(VersionedModel):
+    export_id: str
+    result_id: str
+    artifacts: dict[str, ReportArtifactResponse]
+    lineage: ReportLineageResponse
+
+    @classmethod
+    def from_manifest(cls, manifest: ExportManifest) -> ReportExportResponse:
+        return cls(
+            export_id=manifest.export_id,
+            result_id=manifest.result_id,
+            artifacts={
+                name: ReportArtifactResponse(
+                    relative_path=artifact.relative_path,
+                    media_type=artifact.media_type,
+                    sha256=artifact.sha256,
+                    size_bytes=artifact.size_bytes,
+                )
+                for name, artifact in manifest.artifacts.items()
+            },
+            lineage=ReportLineageResponse.model_validate(
+                manifest.provenance.as_dict()
+            ),
+        )
+
+
 class ReportContentResponse(ApiModel):
     status: Literal["not_yet_exported"]
     message: str
     result_id: str
+    optimization: OptimizationResultPayload
+
+
+class ExportedReportContentResponse(ApiModel):
+    status: Literal["exported"]
+    message: str
+    result_id: str
+    export_id: str
+    artifacts: dict[str, ReportArtifactResponse]
+    lineage: ReportLineageResponse
     optimization: OptimizationResultPayload
 
 
@@ -750,7 +849,11 @@ class ReportResponse(VersionedModel):
     result_id: str | None
     title: str
     export_status: Literal["not_yet_exported", "exported"]
-    content: ReportContentResponse | LegacyReportContent
+    content: (
+        ReportContentResponse
+        | ExportedReportContentResponse
+        | LegacyReportContent
+    )
     created_at: str
 
     @classmethod
@@ -760,13 +863,22 @@ class ReportResponse(VersionedModel):
             record.export_status,
         )
         if record.schema_version != SCHEMA_VERSION:
-            content: ReportContentResponse | LegacyReportContent = LegacyReportContent(
+            content: (
+                ReportContentResponse
+                | ExportedReportContentResponse
+                | LegacyReportContent
+            ) = LegacyReportContent(
                 stored_schema_version=record.schema_version,
                 raw_json=record.raw_json,
             )
         else:
             try:
-                content = ReportContentResponse.model_validate(record.content)
+                if record.export_status == "exported":
+                    content = ExportedReportContentResponse.model_validate(
+                        record.content
+                    )
+                else:
+                    content = ReportContentResponse.model_validate(record.content)
             except ValidationError:
                 content = LegacyReportContent(
                     stored_schema_version=record.schema_version,

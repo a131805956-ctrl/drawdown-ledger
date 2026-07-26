@@ -14,6 +14,7 @@ from drawdown_lab.api.routes import create_router
 from drawdown_lab.api.schemas import ErrorResponse, ValidationIssue
 from drawdown_lab.data.catalog import DataCatalog
 from drawdown_lab.data.update import UpdateCoordinator
+from drawdown_lab.reports.render import ReportExporter, resolve_runtime_identity
 from drawdown_lab.storage.database import Database
 from drawdown_lab.storage.jobs import JobService, JobStore
 
@@ -22,6 +23,10 @@ from drawdown_lab.storage.jobs import JobService, JobStore
 class Settings:
     database_path: Path
     data_root: Path | None = None
+    report_output_root: Path | None = None
+    repository_root: Path | None = None
+    engine_version: str | None = None
+    git_commit: str | None = None
     max_job_workers: int = 1
     job_batch_size: int = 25
     job_lease_seconds: float = 60.0
@@ -33,12 +38,28 @@ def create_app(settings: Settings) -> FastAPI:
     job_store = JobStore(database)
     data_root = settings.data_root or settings.database_path.parent / "data"
     data_catalog = DataCatalog(data_root)
+    source_root = Path(__file__).parents[5]
+    repository_root = settings.repository_root
+    if repository_root is None and (source_root / "pyproject.toml").is_file():
+        repository_root = source_root
+    identity = resolve_runtime_identity(
+        repository_root=repository_root,
+        engine_version=settings.engine_version,
+        git_commit=settings.git_commit,
+    )
+    report_exporter = ReportExporter(
+        job_store=job_store,
+        output_root=settings.report_output_root or Path("reports/private"),
+    )
     job_service = JobService(
         job_store,
         data_catalog,
         max_workers=settings.max_job_workers,
         batch_size=settings.job_batch_size,
         lease_seconds=settings.job_lease_seconds,
+        engine_version=identity.engine_version,
+        git_commit=identity.git_commit,
+        code_state=identity.code_state,
     )
 
     @asynccontextmanager
@@ -58,6 +79,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.job_store = job_store
     app.state.job_service = job_service
     app.state.data_catalog = data_catalog
+    app.state.report_exporter = report_exporter
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -106,6 +128,7 @@ def create_app(settings: Settings) -> FastAPI:
             job_service=job_service,
             data_catalog=data_catalog,
             update_coordinator=settings.update_coordinator,
+            report_exporter=report_exporter,
         )
     )
     return app

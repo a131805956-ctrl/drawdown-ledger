@@ -53,7 +53,19 @@ class UpdateCoordinator:
                 validate_market_frame(refreshed)
                 merged = merge_market_frames(existing, refreshed)
                 validate_market_frame(merged)
-                self.catalog.store(symbol, merged, completed_cutoff=cutoff)
+                provider_name = str(
+                    getattr(
+                        self.provider,
+                        "provider_name",
+                        f"{type(self.provider).__module__}.{type(self.provider).__qualname__}",
+                    )
+                )
+                self.catalog.store(
+                    symbol,
+                    merged,
+                    completed_cutoff=cutoff,
+                    provider=provider_name,
+                )
             except DataUpdateError:
                 raise
             except Exception as error:

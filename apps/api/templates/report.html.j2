@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --shell: #edf1f5;
+      --canvas: #17263c;
+      --signal: #3f72df;
+      --risk: #ed6859;
+      --cash: #2d9d8f;
+      --ink: #17263c;
+      --muted: #5d6978;
+      --line: #cbd5df;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--shell);
+      color: var(--ink);
+      font: 15px/1.6 "Noto Sans TC", "Segoe UI", sans-serif;
+    }
+    main { width: min(1080px, calc(100% - 32px)); margin: 32px auto 64px; }
+    header, section {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      margin-bottom: 16px;
+      padding: 24px;
+    }
+    header { border-top: 6px solid var(--signal); }
+    h1, h2 { margin-top: 0; }
+    h1 { font-size: clamp(24px, 4vw, 38px); line-height: 1.2; }
+    h2 { font-size: 18px; }
+    .eyebrow { color: var(--signal); font-weight: 700; letter-spacing: .08em; }
+    .warning {
+      border-left: 4px solid var(--risk);
+      background: #fff4f2;
+      padding: 12px 16px;
+    }
+    dl { display: grid; grid-template-columns: minmax(180px, 1fr) 2fr; gap: 8px 16px; }
+    dt { color: var(--muted); }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    code, pre, dd { font-family: "JetBrains Mono", Consolas, monospace; }
+    pre {
+      background: var(--canvas);
+      color: #edf1f5;
+      border-radius: 8px;
+      overflow: auto;
+      padding: 16px;
+      white-space: pre-wrap;
+    }
+    table { width: 100%; border-collapse: collapse; overflow-wrap: anywhere; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; }
+    th { color: var(--muted); font-size: 13px; }
+    @media (max-width: 640px) {
+      main { width: min(100% - 16px, 1080px); margin-top: 8px; }
+      header, section { border-radius: 8px; padding: 16px; }
+      dl { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body
+  data-result-id="{{ result_id }}"
+  data-schema-version="{{ schema_version }}"
+  data-stored-schema-version="{{ stored_schema_version }}"
+>
+  <main>
+    <header>
+      <div class="eyebrow">DRAWDOWN LEDGER · TRACEABLE EXPORT</div>
+      <h1>{{ title }}</h1>
+      <p>Result ID: <code>{{ result_id }}</code></p>
+      <p class="warning">{{ disclaimer }}</p>
+    </header>
+
+    <section>
+      <h2>資料血緣與重現資訊</h2>
+      <dl>
+        <dt>Engine version</dt><dd>{{ lineage.engine_version }}</dd>
+        <dt>Git commit</dt><dd>{{ lineage.git_commit }}</dd>
+        <dt>Code state</dt><dd>{{ lineage.code_state }}</dd>
+        <dt>Policy cutoff</dt><dd>{{ lineage.policy_cutoff }}</dd>
+        <dt>Actual session cutoff</dt><dd>{{ lineage.actual_session_cutoff }}</dd>
+        <dt>Generated at</dt><dd>{{ lineage.generated_at }} · {{ lineage.timezone }}</dd>
+        <dt>Result SHA-256</dt><dd>{{ lineage.result_sha256 }}</dd>
+        {% for symbol, snapshot in lineage.data_lineage|dictsort %}
+        <dt>Data source · {{ symbol }}</dt>
+        <dd>
+          {{ snapshot.provider }} · fetched {{ snapshot.fetched_at }} ·
+          {{ snapshot.classification }} · SHA-256 {{ snapshot.sha256 }}
+        </dd>
+        {% endfor %}
+      </dl>
+    </section>
+
+    <section>
+      <h2>實際／合成分界</h2>
+      <dl>
+        {% for key, value in lineage.analysis_boundary|dictsort %}
+        <dt>{{ key }}</dt><dd>{{ value }}</dd>
+        {% endfor %}
+      </dl>
+      <h2>執行參數</h2>
+      <pre>{{ parameters_json }}</pre>
+      <h2>假設</h2>
+      <ul>{% for item in lineage.assumptions %}<li>{{ item }}</li>{% endfor %}</ul>
+      <h2>限制</h2>
+      <ul>{% for item in lineage.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
+    </section>
+
+    <section>
+      <h2>正式結果</h2>
+      <pre
+        id="drawdown-canonical-report"
+        data-content-type="application/json"
+      >{{ report_json }}</pre>
+    </section>
+
+    <section>
+      <h2>最佳化候選（{{ candidates|length }}）</h2>
+      {% if candidates %}
+      <table>
+        <thead><tr>{% for key in candidates[0] %}<th>{{ key }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for row in candidates %}
+          <tr>{% for key in candidates[0] %}<td>{{ row[key] }}</td>{% endfor %}</tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p>此結果未附最佳化候選列。</p>{% endif %}
+    </section>
+
+    <section>
+      <h2>建議方案（{{ recommendations|length }}）</h2>
+      {% if recommendations %}
+      <table>
+        <thead><tr>{% for key in recommendations[0] %}<th>{{ key }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for row in recommendations %}
+          <tr>{% for key in recommendations[0] %}<td>{{ row[key] }}</td>{% endfor %}</tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p>沒有候選通過正式限制條件。</p>{% endif %}
+    </section>
+  </main>
+</body>
+</html>

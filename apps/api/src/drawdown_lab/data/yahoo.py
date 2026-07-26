@@ -46,6 +46,8 @@ def market_frame_from_yahoo_history(history: pd.DataFrame) -> MarketFrame:
 class YahooFinanceProvider:
     """Yahoo Finance implementation of the market-data provider protocol."""
 
+    provider_name = "yahoo-finance"
+
     def fetch(self, symbol: str, start: date, end: date) -> MarketFrame:
         history = yf.Ticker(symbol).history(
             start=start.isoformat(),
