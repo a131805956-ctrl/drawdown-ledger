@@ -105,7 +105,7 @@ AI 不應只挑最高樣本內報酬。至少比較：
 
 ```powershell
 .\scripts\Analyze.ps1 `
-  -Config .\research-request.json `
+  -Config .\.runtime\research-request.json `
   -Endpoint optimization `
   -OutFile .\.runtime\analysis-response.json
 ```

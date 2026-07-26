@@ -35,7 +35,7 @@ jobs:
             --prefix="drawdown-ledger-${GITHUB_REF_NAME}/" \
             --output="release/drawdown-ledger-${GITHUB_REF_NAME}.zip" \
             "${GITHUB_REF_NAME}"
-          sha256sum release/*.zip > release/SHA256SUMS.txt
+          (cd release && sha256sum *.zip > SHA256SUMS.txt)
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

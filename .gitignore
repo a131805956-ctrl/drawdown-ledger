@@ -34,6 +34,18 @@ output/
 # Private market and research data
 /data/
 reports/private/
+research-request.json
+research-request.*.json
+research-config.json
+research-config.*.json
+strategy-config.json
+strategy-config.*.json
+!research-request.example.json
+!research-request.demo.json
+!research-config.example.json
+!research-config.demo.json
+!strategy-config.example.json
+!strategy-config.demo.json
 *.sqlite
 *.sqlite3
 *.db

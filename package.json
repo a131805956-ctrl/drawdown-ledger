@@ -5,9 +5,12 @@
   "scripts": {
     "test:data": "python -m pytest apps/api/tests/data -q",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "typecheck:e2e": "tsc --project tsconfig.json"
   },
   "devDependencies": {
-    "@playwright/test": "1.62.0"
+    "@playwright/test": "1.62.0",
+    "@types/node": "22.20.1",
+    "typescript": "7.0.2"
   }
 }
