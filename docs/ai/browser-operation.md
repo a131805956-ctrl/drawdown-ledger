@@ -18,7 +18,7 @@ http://127.0.0.1:8787/ai
 Funnel 網址使用相同路徑：
 
 ```text
-https://your_tailnet_name.ts.net/drawdown-ledger/ai
+https://desktop-loi23mp.tail9c076e.ts.net/drawdown-ledger/ai
 ```
 
 GitHub Pages 是唯讀備援，不能執行新最佳化。
@@ -54,8 +54,10 @@ AI 應照以下順序操作：
 4. 等待工作狀態變成 `succeeded`
 5. 讀取保守、平衡與積極建議
 6. 讀取 Pareto 候選表
-7. 核對 provenance、獨立事件數與 synthetic stress
-8. 匯出設定 JSON，保存完整輸入
+7. 從 `[data-ai-result="result-json"]` 讀取完整、機器可判讀的結果
+8. 核對 provenance、獨立事件數、`walk_forward_eligible` 與 synthetic stress
+9. 點擊 `[data-ai-action="download-result-json"]` 保存完整結果
+10. 匯出設定 JSON，保存完整輸入
 
 不要以頁面載入動畫判定完成。請等待結果標題「三種可執行方案」出現。
 
@@ -71,6 +73,22 @@ AI 應照以下順序操作：
 
 頁面會驗證 JSON。若欄位錯誤，先修正設定，不要略過限制。
 
+## 讀取並保存分析結果
+
+`[data-ai-result="result-json"]` 是完整 `ResultResponse`，包含所有候選、三種建議、walk-forward 結果、合成壓力測試及資料 provenance。它是隱藏的唯讀文字欄位，AI 應讀取其 `value` 後解析 JSON，不要只擷取畫面上最多 100 列的表格。
+
+```javascript
+const raw = document
+  .querySelector('[data-ai-result="result-json"]')
+  .value;
+const result = JSON.parse(raw);
+const eligible = result.payload.candidates.filter(
+  candidate => candidate.walk_forward_eligible
+);
+```
+
+要保存完整結果，點擊 `[data-ai-action="download-result-json"]`。設定檔與結果檔用途不同，兩者都應保留。
+
 ## 評估候選比例
 
 AI 不應只挑最高樣本內報酬。至少比較：
@@ -84,6 +102,16 @@ AI 不應只挑最高樣本內報酬。至少比較：
 - `walk_forward_eligible`
 
 若獨立事件不足，結果只能標成探索。AI 必須在結論中揭露樣本數與限制。
+
+## 建立私人報告
+
+AI 可開啟 `/reports`，選擇正式結果與 HTML、JSON、CSV 格式，再點擊「建立私人匯出」。此步驟只會在本機建立可驗證 bundle；不會自動公開。公開時仍須執行：
+
+```powershell
+.\scripts\Publish-Report.ps1 -ExportId export_id_here
+```
+
+發布工具會再次做隱私、內容一致性與雜湊檢查。GitHub Pages 只列出通過檢查後明確發布的報告。
 
 ## 可直接交給 AI 的操作指令
 

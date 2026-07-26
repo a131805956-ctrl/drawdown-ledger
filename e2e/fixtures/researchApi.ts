@@ -3,6 +3,7 @@ import type { Page, Route } from "@playwright/test";
 import { staticResearchSnapshot } from "../../apps/web/src/demo/staticSnapshot";
 import type {
     JobResponse,
+    ReportExportResponse,
     ResultResponse,
     StrategyBacktestResponse,
 } from "../../apps/web/src/lib/contracts";
@@ -100,6 +101,49 @@ const completedJob: JobResponse = {
     created_at: "2026-07-26T00:00:00Z",
     updated_at: "2026-07-26T00:01:00Z",
     completed_at: "2026-07-26T00:01:00Z",
+};
+
+const reportExportResult: ReportExportResponse = {
+    schema_version: "1.0",
+    export_id: "export-0123456789abcdef01234567",
+    result_id: "illustrative-result-2026-07-31",
+    artifacts: {
+        html: {
+            relative_path: "report.html",
+            media_type: "text/html; charset=utf-8",
+            sha256: "a".repeat(64),
+            size_bytes: 200,
+        },
+        json: {
+            relative_path: "report.json",
+            media_type: "application/json",
+            sha256: "b".repeat(64),
+            size_bytes: 300,
+        },
+        csv: {
+            relative_path: "candidates.csv",
+            media_type: "text/csv; charset=utf-8",
+            sha256: "c".repeat(64),
+            size_bytes: 400,
+        },
+    },
+    lineage: {
+        engine_version: "0.1.0",
+        git_commit: "d".repeat(40),
+        code_state: "clean",
+        data_hashes: { TQQQ: "e".repeat(64) },
+        data_lineage: {},
+        policy_cutoff: "2026-06-30",
+        actual_session_cutoff: "2026-06-30",
+        result_sha256: "f".repeat(64),
+        generated_at: "2026-07-26T02:00:00Z",
+        timezone: "Asia/Taipei",
+        parameters: {},
+        parameters_sha256: "0".repeat(64),
+        analysis_boundary: {},
+        assumptions: [],
+        limitations: [],
+    },
 };
 
 function optimizationResult(): ResultResponse {
@@ -215,6 +259,13 @@ export async function installResearchApiMocks(
         }
         if (request.method() === "GET" && pathname.endsWith("/reports")) {
             await fulfillJson(route, staticResearchSnapshot.reports);
+            return;
+        }
+        if (
+            request.method() === "POST" &&
+            pathname.endsWith("/reports/export")
+        ) {
+            await fulfillJson(route, reportExportResult, 201);
             return;
         }
 

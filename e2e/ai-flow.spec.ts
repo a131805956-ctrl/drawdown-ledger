@@ -34,6 +34,26 @@ test("AI mode exposes deterministic controls and completes a grid search", async
     await expect(
         page.getByRole("table", { name: "Pareto 候選策略" }),
     ).toContainText("25% / 35% / 40%");
+    await expect(
+        page.getByRole("table", { name: "Pareto 候選策略" }),
+    ).toContainText("合格");
+
+    const machineResult = JSON.parse(
+        await page
+            .locator("[data-ai-result='result-json']")
+            .inputValue(),
+    ) as {
+        id: string;
+        payload: {
+            candidates: Array<{
+                walk_forward_eligible: boolean;
+            }>;
+        };
+    };
+    expect(machineResult.id).toBe("result-e2e");
+    expect(
+        machineResult.payload.candidates[0]?.walk_forward_eligible,
+    ).toBe(true);
 
     const createRequest = api.requests.find((request) =>
         request.pathname.endsWith("/optimizations"),

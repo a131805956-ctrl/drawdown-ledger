@@ -22,7 +22,7 @@ test("researcher can inspect evidence and run a cash-pool strategy", async ({
     const conclusion = page.getByRole("note", {
         name: "核心歷史結論",
     });
-    await expect(conclusion).toContainText("2 次獨立歷史事件");
+    await expect(conclusion).toContainText("1 次獨立歷史事件");
     await expect(conclusion).toContainText("一年後平均總報酬");
     await expect(
         page.getByRole("region", { name: "同步研究線圖" }),

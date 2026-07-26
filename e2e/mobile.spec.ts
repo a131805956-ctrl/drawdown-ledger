@@ -79,4 +79,51 @@ for (const viewport of viewports) {
             contentType: "image/png",
         });
     });
+
+    test(`mobile report ledger contains its own grid at ${viewport.label}`, async ({
+        page,
+    }) => {
+        await page.setViewportSize(viewport);
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await installResearchApiMocks(page);
+
+        await page.goto("reports");
+        await expect(
+            page.getByRole("heading", { name: "報告與比較" }),
+        ).toBeVisible();
+
+        const geometry = await page
+            .locator(".reports-ledger")
+            .evaluate((ledger) => {
+                const ledgerRect = ledger.getBoundingClientRect();
+                const offenders = [
+                    ...ledger.querySelectorAll<HTMLElement>(":scope > *"),
+                ]
+                    .map((element) => {
+                        const rect = element.getBoundingClientRect();
+                        return {
+                            className: element.className,
+                            left: Math.round(rect.left),
+                            right: Math.round(rect.right),
+                        };
+                    })
+                    .filter(
+                        (entry) =>
+                            entry.left < ledgerRect.left - 1 ||
+                            entry.right > ledgerRect.right + 1,
+                    );
+                return {
+                    clientWidth: ledger.clientWidth,
+                    scrollWidth: ledger.scrollWidth,
+                    ledgerLeft: Math.round(ledgerRect.left),
+                    ledgerRight: Math.round(ledgerRect.right),
+                    offenders,
+                };
+            });
+
+        expect(geometry.scrollWidth).toBeLessThanOrEqual(
+            geometry.clientWidth,
+        );
+        expect(geometry.offenders).toEqual([]);
+    });
 }
