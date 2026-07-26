@@ -116,6 +116,25 @@ jobs:
       - name: Run lifecycle tests with Windows PowerShell
         shell: powershell
         run: |
+          $pester3 = Get-Module -ListAvailable Pester |
+            Where-Object Version -EQ ([version]'3.4.0') |
+            Select-Object -First 1
+          if ($null -eq $pester3) {
+            $moduleRoot = Join-Path $env:RUNNER_TEMP 'pester3'
+            Save-Module `
+              -Name Pester `
+              -RequiredVersion 3.4.0 `
+              -Path $moduleRoot `
+              -Force
+            $pester3 = Get-Module `
+              -ListAvailable `
+              (Join-Path $moduleRoot 'Pester\3.4.0\Pester.psd1')
+          }
+          Remove-Module Pester -Force -ErrorAction SilentlyContinue
+          Import-Module $pester3.Path -Force
+          if ((Get-Module Pester).Version -ne [version]'3.4.0') {
+            throw 'Lifecycle tests require Pester 3.4.0.'
+          }
           $result = Invoke-Pester -Script '.\tests\powershell\*.Tests.ps1' -PassThru
           if ($result.FailedCount -gt 0) {
             exit 1
