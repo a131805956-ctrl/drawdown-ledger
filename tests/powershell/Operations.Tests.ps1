@@ -46,6 +46,15 @@ Describe 'One-click script contract' {
             @($errors).Count | Should Be 0
         }
     }
+
+    It 'installs the project without an editable path hook' {
+        $startScript = Get-Content `
+            -LiteralPath (Join-Path $ProjectRoot 'scripts\Start.ps1') `
+            -Raw
+
+        $startScript | Should Not Match '(?m)\bpip install[^\r\n]*\s-e(?:\s|$)'
+        $startScript | Should Match '(?m)\bpip install[^\r\n]*\$projectRoot'
+    }
 }
 
 Describe 'Project process ownership' {

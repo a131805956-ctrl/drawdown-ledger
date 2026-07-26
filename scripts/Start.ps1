@@ -37,7 +37,7 @@ if ($MyInvocation.InvocationName -ne '.') {
                 throw 'Unable to create the Python virtual environment.'
             }
         }
-        & $venvPython -m pip install --disable-pip-version-check -e $projectRoot
+        & $venvPython -m pip install --disable-pip-version-check $projectRoot
         if ($LASTEXITCODE -ne 0) {
             throw 'Unable to install the API environment.'
         }
