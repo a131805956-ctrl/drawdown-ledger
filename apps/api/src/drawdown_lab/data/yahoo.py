@@ -1,49 +1,99 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from datetime import date, timedelta
+from importlib import import_module
 from pathlib import Path
+from typing import Protocol, cast
 from uuid import uuid4
 
 import certifi
 import pandas as pd
-import yfinance as yf
 
 from drawdown_lab.data.models import MarketFrame
 
 
-def _configure_curl_ca_bundle() -> None:
-    if os.environ.get("CURL_CA_BUNDLE"):
-        return
+class _Ticker(Protocol):
+    def history(self, **kwargs: object) -> pd.DataFrame: ...
 
-    source = Path(certifi.where()).resolve()
-    if str(source).isascii():
-        return
 
-    destination: Path | None = None
-    for root in (os.environ.get("LOCALAPPDATA"), tempfile.gettempdir()):
-        if not root:
-            continue
-        candidate = Path(root).resolve() / "DrawdownLedger" / "cacert.pem"
-        if str(candidate).isascii():
-            destination = candidate
+class _CurlSession(Protocol):
+    verify: bool | str | None
+
+    def close(self) -> None: ...
+
+
+class _YFinance(Protocol):
+    def Ticker(self, symbol: str, *, session: _CurlSession) -> _Ticker: ...
+
+
+class _CurlRequests(Protocol):
+    def Session(self, *, verify: str) -> _CurlSession: ...
+
+
+def _load_yfinance() -> _YFinance:
+    return cast(_YFinance, import_module("yfinance"))
+
+
+def _load_curl_requests() -> _CurlRequests:
+    return cast(_CurlRequests, import_module("curl_cffi.requests"))
+
+
+def _resolve_curl_ca_bundle() -> Path:
+    source: Path | None = None
+    source_label = "certifi"
+    for variable in (
+        "SSL_CERT_FILE",
+        "CURL_CA_BUNDLE",
+        "REQUESTS_CA_BUNDLE",
+    ):
+        configured = os.environ.get(variable)
+        if configured:
+            source = Path(configured).expanduser().resolve()
+            source_label = variable
             break
-    if destination is None:
-        raise RuntimeError(
-            "Yahoo TLS requires an ASCII-safe LOCALAPPDATA or temporary directory."
-        )
+    if source is None:
+        source = Path(certifi.where()).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"{source_label} CA bundle does not exist: {source}")
+    if str(source).isascii():
+        return source
 
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        raise RuntimeError(
+            "Yahoo TLS requires an ASCII-safe LOCALAPPDATA directory."
+        )
+    destination = (
+        Path(local_app_data).expanduser().resolve()
+        / "DrawdownLedger"
+        / "cacert.pem"
+    )
+    if not str(destination).isascii():
+        raise RuntimeError(
+            "Yahoo TLS requires an ASCII-safe LOCALAPPDATA directory."
+        )
+    if destination.parent.is_symlink() or destination.is_symlink():
+        raise RuntimeError("Yahoo TLS CA cache cannot be a symbolic link.")
+
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     source_bytes = source.read_bytes()
     if not destination.is_file() or destination.read_bytes() != source_bytes:
-        destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(f".cacert-{uuid4().hex}.tmp")
         try:
-            temporary.write_bytes(source_bytes)
+            descriptor = os.open(
+                temporary,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(source_bytes)
+                output.flush()
+                os.fsync(output.fileno())
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)
-    os.environ["CURL_CA_BUNDLE"] = str(destination)
+    return destination
 
 
 def market_frame_from_yahoo_history(history: pd.DataFrame) -> MarketFrame:
@@ -87,11 +137,17 @@ class YahooFinanceProvider:
     provider_name = "yahoo-finance"
 
     def fetch(self, symbol: str, start: date, end: date) -> MarketFrame:
-        _configure_curl_ca_bundle()
-        history = yf.Ticker(symbol).history(
-            start=start.isoformat(),
-            end=(end + timedelta(days=1)).isoformat(),
-            auto_adjust=False,
-            actions=True,
-        )
+        ca_bundle = _resolve_curl_ca_bundle()
+        curl_requests = _load_curl_requests()
+        yfinance = _load_yfinance()
+        session = curl_requests.Session(verify=str(ca_bundle))
+        try:
+            history = yfinance.Ticker(symbol, session=session).history(
+                start=start.isoformat(),
+                end=(end + timedelta(days=1)).isoformat(),
+                auto_adjust=False,
+                actions=True,
+            )
+        finally:
+            session.close()
         return market_frame_from_yahoo_history(history)
