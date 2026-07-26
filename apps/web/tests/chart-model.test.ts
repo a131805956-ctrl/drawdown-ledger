@@ -1,4 +1,5 @@
 import {
+    aggregateChartPoints,
     createDepthBands,
     createTradeMarker,
     measureChartRange,
@@ -62,6 +63,49 @@ describe("research chart model", () => {
             { time: "2020-02-20", value: 82 },
             { time: "2020-02-24", value: 95 },
         ]);
+    });
+
+    it("downsamples chart display by calendar week or month without changing daily data", () => {
+        const displayPoints: ChartDatum[] = [
+            ...points,
+            {
+                session: "2020-02-28",
+                close: 92,
+                totalReturnClose: 194,
+                drawdown: -0.08,
+            },
+            {
+                session: "2020-03-02",
+                close: 88,
+                totalReturnClose: 187,
+                drawdown: -0.12,
+            },
+            {
+                session: "2020-03-31",
+                close: 94,
+                totalReturnClose: 201,
+                drawdown: -0.06,
+            },
+        ];
+
+        expect(aggregateChartPoints(displayPoints, "daily")).toEqual(
+            displayPoints,
+        );
+        expect(
+            aggregateChartPoints(displayPoints, "weekly").map(
+                (point) => point.session,
+            ),
+        ).toEqual([
+            "2020-02-20",
+            "2020-02-28",
+            "2020-03-02",
+            "2020-03-31",
+        ]);
+        expect(
+            aggregateChartPoints(displayPoints, "monthly").map(
+                (point) => point.session,
+            ),
+        ).toEqual(["2020-02-28", "2020-03-31"]);
     });
 
     it("measures calendar time, trading sessions, both returns, and drawdown", () => {

@@ -11,6 +11,8 @@ export type SeriesMode =
     | "normalized-price"
     | "normalized-total-return";
 
+export type ChartAggregation = "daily" | "weekly" | "monthly";
+
 export interface SeriesValue {
     time: string;
     value: number;
@@ -65,6 +67,33 @@ function finiteNumber(value: string | number, label: string): number {
 
 function rounded(value: number): number {
     return Number(value.toFixed(12));
+}
+
+function utcWeekKey(session: string): string {
+    const date = new Date(`${session}T00:00:00Z`);
+    const day = date.getUTCDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    date.setUTCDate(date.getUTCDate() + mondayOffset);
+    return date.toISOString().slice(0, 10);
+}
+
+export function aggregateChartPoints(
+    points: readonly ChartDatum[],
+    aggregation: ChartAggregation,
+): ChartDatum[] {
+    if (aggregation === "daily") {
+        return [...points];
+    }
+
+    const lastPointByPeriod = new Map<string, ChartDatum>();
+    for (const point of points) {
+        const period =
+            aggregation === "monthly"
+                ? point.session.slice(0, 7)
+                : utcWeekKey(point.session);
+        lastPointByPeriod.set(period, point);
+    }
+    return [...lastPointByPeriod.values()];
 }
 
 function percent(value: string | number | null): string {
