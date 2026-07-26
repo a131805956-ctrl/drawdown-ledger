@@ -21,6 +21,10 @@ Funnel 網址使用相同路徑：
 https://desktop-loi23mp.tail9c076e.ts.net/drawdown-ledger/ai
 ```
 
+Funnel 會先要求 HTTP Basic 驗證。帳號固定為 `drawdown`，密碼只從本機
+`.runtime\public-access.json` 交給受信任的瀏覽器工作階段；不要把密碼寫進
+AI 提示或匯出的設定 JSON。直接操作本機網址不需此驗證。
+
 GitHub Pages 是唯讀備援，不能執行新最佳化。
 
 ## 填寫核心欄位

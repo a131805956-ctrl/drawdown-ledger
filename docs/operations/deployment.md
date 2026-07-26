@@ -36,6 +36,8 @@ tailscale version
 ```
 
 腳本會建立 `.venv`、安裝 Python 套件、執行 `npm ci`、建置 React 介面、啟動 `127.0.0.1:8787`，再更新前一個月的資料。啟動完成後開啟 `http://127.0.0.1:8787/`。
+首次啟動也會在 `.runtime\public-access.json` 產生一組強密碼；後續啟動會
+重用同一組。這個檔案不提交 Git，也不要放進公開報告。
 
 若 Yahoo 更新失敗，腳本回傳 `running-degraded` 並繼續使用舊快取。請到 `http://127.0.0.1:8787/api/v1/data/health` 確認政策截止日與實際最後交易日。
 
@@ -48,12 +50,18 @@ tailscale version
 ```
 
 預設公開路徑是 `/drawdown-ledger`。腳本會拒絕不屬於本專案的既有路由。只有你確認要替換同一路徑時，才可加入 `-ReplaceExisting`。
+腳本在變更 Funnel 前，會模擬外部來源確認未驗證請求得到 `401`、正確
+Basic 驗證可讀取健康端點；任一檢查失敗都拒絕公開。瀏覽器登入帳號固定為
+`drawdown`，密碼位於 `.runtime\public-access.json`。直接在本機開啟
+`127.0.0.1` 不需登入。
 
 ```powershell
 .\scripts\Open-Funnel.ps1 -ReplaceExisting
 ```
 
 不要對 Tailscale 執行全域 `reset`。Drawdown Ledger 只管理 `/drawdown-ledger`，並保留其他 Funnel 路徑。
+不要把 Basic 密碼寫入網址、AI 提示、Issue、PR 或截圖；需要更換時先停止
+服務與 Funnel，移走該 credential 檔，再重新啟動產生新密碼。
 
 ## 停止服務
 

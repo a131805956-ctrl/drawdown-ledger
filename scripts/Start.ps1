@@ -51,12 +51,16 @@ if ($MyInvocation.InvocationName -ne '.') {
             Factory = $factory
             ServesWebDist = $true
             WillUpdateData = -not $SkipDataUpdate
+            PublicAccessProtected = $true
         }
         return
     }
 
     Import-Module (Join-Path $PSScriptRoot 'lib\ProcessState.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot 'lib\PublicAccess.psm1') -Force
     New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
+    $credentialPath = Join-Path $runtimeRoot 'public-access.json'
+    $credential = New-DrawdownPublicCredential -Path $credentialPath
     $venvPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
     if (-not $SkipInstall) {
         if (-not (Test-Path -LiteralPath $venvPython)) {
@@ -103,8 +107,18 @@ if ($MyInvocation.InvocationName -ne '.') {
         'DRAWDOWN_PROJECT_ROOT',
         'Process'
     )
+    $previousPublicUsername = [Environment]::GetEnvironmentVariable(
+        'DRAWDOWN_PUBLIC_USERNAME',
+        'Process'
+    )
+    $previousPublicPassword = [Environment]::GetEnvironmentVariable(
+        'DRAWDOWN_PUBLIC_PASSWORD',
+        'Process'
+    )
     try {
         $env:DRAWDOWN_PROJECT_ROOT = $projectRoot
+        $env:DRAWDOWN_PUBLIC_USERNAME = $credential.Username
+        $env:DRAWDOWN_PUBLIC_PASSWORD = $credential.Password
         $process = Start-ProjectProcess `
             -FilePath $venvPython `
             -ArgumentList $argumentList `
@@ -121,6 +135,18 @@ if ($MyInvocation.InvocationName -ne '.') {
         }
         else {
             $env:DRAWDOWN_PROJECT_ROOT = $previousProjectRoot
+        }
+        if ($null -eq $previousPublicUsername) {
+            Remove-Item Env:DRAWDOWN_PUBLIC_USERNAME -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:DRAWDOWN_PUBLIC_USERNAME = $previousPublicUsername
+        }
+        if ($null -eq $previousPublicPassword) {
+            Remove-Item Env:DRAWDOWN_PUBLIC_PASSWORD -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:DRAWDOWN_PUBLIC_PASSWORD = $previousPublicPassword
         }
     }
 
@@ -167,6 +193,8 @@ if ($MyInvocation.InvocationName -ne '.') {
         }
         ProcessId = $process.Id
         LocalUrl = "http://127.0.0.1:$ApiPort/"
+        PublicAccessUsername = $credential.Username
+        PublicAccessCredentialFile = $credential.Path
         DataStatus = $updateResult.Status
         ExitPolicy = $updateResult.ExitPolicy
         DataMessage = $updateResult.Message

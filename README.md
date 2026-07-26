@@ -52,6 +52,10 @@ Set-Location C:\path\to\drawdown-ledger
 ```
 
 預設公開路徑是 `/drawdown-ledger`。腳本不會重設 Funnel，也不會改寫其他公開路徑。
+`Start.ps1` 會建立忽略於 Git 的 `.runtime\public-access.json`；Funnel
+只在確認非本機連線需要 HTTP Basic 驗證後才會開啟。瀏覽器提示登入時，
+帳號是 `drawdown`，密碼請從該本機檔案讀取，勿貼到 Issue、PR 或日誌。
+直接使用 `127.0.0.1` 的本機介面不需登入。
 
 ```powershell
 .\scripts\Stop.ps1
