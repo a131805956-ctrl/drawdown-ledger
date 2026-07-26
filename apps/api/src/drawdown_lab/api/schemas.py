@@ -54,6 +54,7 @@ class InstrumentListResponse(VersionedModel):
 
 class DataCoverageResponse(ApiModel):
     symbol: str
+    roles: tuple[Literal["tradable", "prototype"], ...]
     cached: bool
     actual_last_session: date | None
     policy_cutoff: date | None

@@ -53,6 +53,7 @@ from drawdown_lab.domain.instruments import (
     INSTRUMENT_FAMILIES,
     InstrumentFamilyMismatchError,
     InstrumentFamilyNotFoundError,
+    market_symbol_roles,
     resolve_family_instrument,
 )
 from drawdown_lab.storage.jobs import (
@@ -117,19 +118,18 @@ def create_router(
 
     @router.get("/data/health", response_model=DataHealthResponse)
     def data_health() -> DataHealthResponse:
-        symbols = tuple(
-            instrument.symbol for family in INSTRUMENT_FAMILIES for instrument in family.instruments
-        )
+        symbols = market_symbol_roles()
         return DataHealthResponse(
             status="healthy",
             coverage=tuple(
                 DataCoverageResponse(
                     symbol=symbol,
+                    roles=roles,
                     cached=data_catalog.read(symbol) is not None,
                     actual_last_session=data_catalog.actual_last_session(symbol),
                     policy_cutoff=data_catalog.policy_cutoff(symbol),
                 )
-                for symbol in symbols
+                for symbol, roles in symbols.items()
             ),
         )
 

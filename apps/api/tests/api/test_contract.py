@@ -54,6 +54,19 @@ def test_responses_are_schema_versioned_and_json_is_deterministic(tmp_path: Path
     assert overview.json()["schema_version"] == "1.0"
 
 
+def test_hidden_prototype_is_healthy_but_not_user_selectable(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        instruments = client.get("/api/v1/instruments").json()["instruments"]
+        coverage = client.get("/api/v1/data/health").json()["coverage"]
+
+    instrument_symbols = {row["symbol"] for row in instruments}
+    coverage_by_symbol = {row["symbol"]: row for row in coverage}
+    assert len(instrument_symbols) == 16
+    assert "^TWII" not in instrument_symbols
+    assert coverage_by_symbol["^TWII"]["roles"] == ["prototype"]
+    assert coverage_by_symbol["QQQ"]["roles"] == ["tradable", "prototype"]
+
+
 def test_unconfigured_data_update_is_typed_and_never_calls_yahoo(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
         response = client.post(

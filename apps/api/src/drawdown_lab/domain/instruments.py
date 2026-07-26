@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
+
+MarketSymbolRole = Literal["tradable", "prototype"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +187,33 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
         ),
     ),
 )
+
+
+def market_symbol_roles() -> dict[str, tuple[MarketSymbolRole, ...]]:
+    """Return every trusted series required by the registered instruments.
+
+    Prototype-only symbols stay out of ``INSTRUMENT_FAMILIES[*].instruments``
+    so they cannot accidentally become user-selectable traded targets.
+    """
+
+    roles_by_symbol: dict[str, list[MarketSymbolRole]] = {}
+    for family in INSTRUMENT_FAMILIES:
+        for instrument in family.instruments:
+            roles_by_symbol.setdefault(instrument.symbol, []).append("tradable")
+            prototype_roles = roles_by_symbol.setdefault(
+                instrument.prototype_symbol,
+                [],
+            )
+            if "prototype" not in prototype_roles:
+                prototype_roles.append("prototype")
+    return {
+        symbol: tuple(roles)
+        for symbol, roles in roles_by_symbol.items()
+    }
+
+
+def required_market_symbols() -> tuple[str, ...]:
+    return tuple(market_symbol_roles())
 
 
 class InstrumentFamilyNotFoundError(LookupError):
