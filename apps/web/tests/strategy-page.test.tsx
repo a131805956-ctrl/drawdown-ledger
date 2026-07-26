@@ -212,6 +212,23 @@ function strategyApi() {
 }
 
 describe("cash-pool strategy laboratory", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("uses the previous calendar month in Asia/Taipei at the local month boundary", () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-07-31T16:30:00.000Z"));
+
+        render(
+            <MemoryRouter initialEntries={["/strategy"]}>
+                <App api={strategyApi()} capability={{ mode: "live" }} />
+            </MemoryRouter>,
+        );
+
+        expect(screen.getByLabelText("結束日")).toHaveValue("2026-07-31");
+    });
+
     it("submits an executable no-sell ladder and renders cash, trades, and performance", async () => {
         const user = userEvent.setup();
         const api = strategyApi();

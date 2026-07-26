@@ -7,10 +7,15 @@ import {
 } from "react";
 
 import { useResearchData } from "../lib/api";
+import { priorCalendarMonthEnd } from "../lib/calendar";
 import type {
     OptimizationCreateRequest,
     ResultResponse,
 } from "../lib/contracts";
+import {
+    useNavigate,
+    useSearchParams,
+} from "../lib/router";
 
 const familyNames: Record<string, string> = {
     "taiwan-50": "台灣 50",
@@ -26,18 +31,6 @@ const profileNames = {
     balanced: "平衡",
     aggressive: "積極",
 } as const;
-
-function priorCalendarMonthEnd(reference = new Date()): string {
-    return new Date(
-        Date.UTC(
-            reference.getUTCFullYear(),
-            reference.getUTCMonth(),
-            0,
-        ),
-    )
-        .toISOString()
-        .slice(0, 10);
-}
 
 function decimalPercent(value: string): string {
     return (Number(value) / 100).toFixed(2);
@@ -83,7 +76,11 @@ function copyText(value: string): Promise<void> {
 
 export function AiBatchPage() {
     const { api, capability } = useResearchData();
-    const [familyId, setFamilyId] = useState("nasdaq-100");
+    const [parameters] = useSearchParams();
+    const navigate = useNavigate();
+    const queriedFamily =
+        parameters.get("family") ?? "nasdaq-100";
+    const familyId = queriedFamily;
     const [targetChoice, setTargetChoice] = useState("");
     const [start, setStart] = useState("2011-01-03");
     const [end, setEnd] = useState(priorCalendarMonthEnd);
@@ -106,6 +103,19 @@ export function AiBatchPage() {
     const [jobId, setJobId] = useState<string | null>(null);
     const [copyStatus, setCopyStatus] = useState("");
     const [importStatus, setImportStatus] = useState("");
+
+    const selectFamily = (
+        nextFamily: string,
+        nextTarget = "",
+    ) => {
+        setTargetChoice(nextTarget);
+        if (parameters.get("family") !== nextFamily) {
+            const nextParameters = new URLSearchParams(parameters);
+            nextParameters.set("family", nextFamily);
+            navigate(`/ai?${nextParameters.toString()}`, true);
+        }
+    };
+
     const instrumentsQuery = useQuery({
         queryKey: ["instruments"],
         queryFn: api.getInstruments,
@@ -234,7 +244,8 @@ export function AiBatchPage() {
     const importConfiguration = async (
         event: ChangeEvent<HTMLInputElement>,
     ) => {
-        const file = event.currentTarget.files?.[0];
+        const input = event.currentTarget;
+        const file = input.files?.[0];
         if (file === undefined) {
             return;
         }
@@ -252,8 +263,7 @@ export function AiBatchPage() {
             ) {
                 throw new Error("Incomplete optimization request");
             }
-            setFamilyId(parsed.family_id);
-            setTargetChoice(parsed.target_symbol);
+            selectFamily(parsed.family_id, parsed.target_symbol);
             setStart(parsed.strategy.start);
             setEnd(parsed.strategy.end);
             setInitialCash(String(parsed.strategy.initial_cash));
@@ -318,7 +328,7 @@ export function AiBatchPage() {
         } catch {
             setImportStatus("匯入失敗：請選擇完整的設定 JSON。");
         } finally {
-            event.currentTarget.value = "";
+            input.value = "";
         }
     };
     const aiInstructions = [
@@ -400,10 +410,9 @@ export function AiBatchPage() {
                                 data-ai-field="family_id"
                                 value={familyId}
                                 onChange={(event) => {
-                                    setFamilyId(
+                                    selectFamily(
                                         event.currentTarget.value,
                                     );
-                                    setTargetChoice("");
                                 }}
                             >
                                 {familyIds.map((id) => (
