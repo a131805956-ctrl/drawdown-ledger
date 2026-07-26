@@ -236,7 +236,7 @@ export function StrategyPage() {
         (instrument) => instrument.symbol === targetChoice,
     )
         ? targetChoice
-        : (familyInstruments[0]?.symbol ?? "");
+        : (familyInstruments.at(-1)?.symbol ?? "");
 
     const backtest = useMutation({
         mutationFn: async (): Promise<StrategyBundle> => {

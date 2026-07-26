@@ -65,6 +65,7 @@ export interface StaticResearchSnapshot {
     overview: MarketOverviewResponse;
     health: DataHealthResponse;
     evidence?: EvidenceAnalyzeResponse;
+    evidenceThreshold?: number;
     marketSeries?: MarketSeriesResponse;
     results?: ResultListResponse;
     reports?: ReportListResponse;
@@ -255,6 +256,16 @@ function unavailableInStaticMode<T>(feature: string): Promise<T> {
     );
 }
 
+function staticSnapshotMiss<T>(feature: string): Promise<T> {
+    return Promise.reject(
+        new ResearchApiError(
+            `${feature} is not included in the fixed static snapshot`,
+            404,
+            null,
+        ),
+    );
+}
+
 export function createStaticResearchApi(
     snapshot: StaticResearchSnapshot = emptyStaticSnapshot,
 ): ResearchApi {
@@ -262,14 +273,27 @@ export function createStaticResearchApi(
         getInstruments: () => Promise.resolve(snapshot.instruments),
         getMarketOverview: () => Promise.resolve(snapshot.overview),
         getDataHealth: () => Promise.resolve(snapshot.health),
-        getMarketSeries: () =>
+        getMarketSeries: (query) =>
             snapshot.marketSeries === undefined
                 ? unavailableInStaticMode("Market series")
-                : Promise.resolve(snapshot.marketSeries),
-        analyzeEvidence: () =>
+                : snapshot.marketSeries.family_id !== query.family_id ||
+                    snapshot.marketSeries.target_symbol !==
+                        query.target_symbol
+                  ? staticSnapshotMiss("Market series")
+                  : Promise.resolve(snapshot.marketSeries),
+        analyzeEvidence: (request) =>
             snapshot.evidence === undefined
                 ? unavailableInStaticMode("Evidence analysis")
-                : Promise.resolve(snapshot.evidence),
+                : snapshot.evidence.family_id !== request.family_id ||
+                    snapshot.evidence.target_symbol !==
+                        request.target_symbol ||
+                    (snapshot.evidenceThreshold !== undefined &&
+                        Math.abs(
+                            snapshot.evidenceThreshold -
+                                request.threshold,
+                        ) > 1e-9)
+                  ? staticSnapshotMiss("Evidence analysis")
+                  : Promise.resolve(snapshot.evidence),
         backtestStrategy: () =>
             unavailableInStaticMode("Strategy backtesting"),
         createOptimization: () =>

@@ -8,6 +8,7 @@ import {
     type DataCapability,
     type ResearchApi,
 } from "../lib/api";
+import { staticResearchSnapshot } from "../demo/staticSnapshot";
 import { AppRoutes } from "./routes";
 
 interface AppProps {
@@ -24,7 +25,7 @@ export function App({ api, capability }: AppProps) {
         () =>
             api ??
             (resolvedCapability.mode === "static"
-                ? createStaticResearchApi()
+                ? createStaticResearchApi(staticResearchSnapshot)
                 : createLiveResearchApi()),
         [api, resolvedCapability.mode],
     );

@@ -109,4 +109,47 @@ describe("research API clients", () => {
 
         expect(fetchSpy).not.toHaveBeenCalled();
     });
+
+    it("never substitutes a fixed static study for a different requested target", async () => {
+        const api = createStaticResearchApi({
+            instruments: { schema_version: "1.0", instruments: [] },
+            overview: {
+                schema_version: "1.0",
+                instrument_count: 0,
+                cached_symbols: [],
+                formal_result_count: 0,
+            },
+            health: {
+                schema_version: "1.0",
+                status: "healthy",
+                coverage: [],
+            },
+            evidence: {
+                schema_version: "1.0",
+                family_id: "nasdaq-100",
+                target_symbol: "TQQQ",
+                prototype_symbol: "^NDX",
+                prototype_source: "benchmark",
+                prototype_actual_last_session: "2026-07-31",
+                prototype_policy_cutoff: "2026-07-31",
+                target_actual_last_session: "2026-07-31",
+                target_policy_cutoff: "2026-07-31",
+                n_day: 0,
+                n_episode: 0,
+                n_executed_episode: 0,
+                daily_statistics: [],
+                episode_statistics: [],
+                episodes: [],
+            },
+        });
+
+        await expect(
+            api.analyzeEvidence({
+                schema_version: "1.0",
+                family_id: "sp-500",
+                target_symbol: "UPRO",
+                threshold: 0.3,
+            }),
+        ).rejects.toMatchObject({ status: 404 });
+    });
 });

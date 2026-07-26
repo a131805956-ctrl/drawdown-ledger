@@ -132,7 +132,7 @@ export function AiBatchPage() {
         (instrument) => instrument.symbol === targetChoice,
     )
         ? targetChoice
-        : (familyInstruments[0]?.symbol ?? "");
+        : (familyInstruments.at(-1)?.symbol ?? "");
 
     const buildRequest = (): OptimizationCreateRequest => ({
         schema_version: "1.0",

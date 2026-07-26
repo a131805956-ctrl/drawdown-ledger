@@ -283,7 +283,7 @@ export function EvidencePage() {
         (instrument) => instrument.symbol === targetChoice,
     )
         ? targetChoice
-        : (familyInstruments[0]?.symbol ?? "");
+        : (familyInstruments.at(-1)?.symbol ?? "");
 
     const analysis = useMutation({
         mutationFn: async (): Promise<EvidenceBundle> => {
