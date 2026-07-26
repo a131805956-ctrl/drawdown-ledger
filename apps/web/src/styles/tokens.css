@@ -1,0 +1,46 @@
+:root {
+    color-scheme: light;
+
+    --color-shell: #edf1f5;
+    --color-surface: #ffffff;
+    --color-surface-subtle: #f7f9fb;
+    --color-canvas: #17263c;
+    --color-canvas-raised: #20334e;
+    --color-ink: #132035;
+    --color-ink-soft: #536176;
+    --color-line: #ccd5df;
+    --color-line-strong: #9baabc;
+    --color-signal: #3f72df;
+    --color-signal-soft: #dfe8fb;
+    --color-risk: #ed6859;
+    --color-risk-soft: #fde9e6;
+    --color-cash: #2d9d8f;
+    --color-cash-soft: #dff1ee;
+    --color-focus: #f1b84b;
+
+    --font-display: "Sora Variable", "Sora", "Noto Sans TC Variable",
+        "Noto Sans TC", system-ui, sans-serif;
+    --font-body: "Noto Sans TC Variable", "Noto Sans TC", "PingFang TC",
+        "Microsoft JhengHei", system-ui, sans-serif;
+    --font-data: "JetBrains Mono Variable", "JetBrains Mono", "SFMono-Regular",
+        Consolas, monospace;
+
+    --text-xs: 0.75rem;
+    --text-sm: 0.875rem;
+    --text-base: 1rem;
+    --text-lg: 1.125rem;
+    --text-xl: clamp(1.5rem, 2vw, 2rem);
+    --text-display: clamp(2.35rem, 5vw, 4.8rem);
+
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.5rem;
+    --space-6: 2rem;
+    --space-7: 3rem;
+
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --shadow-raised: 0 12px 35px rgb(23 38 60 / 9%);
+}

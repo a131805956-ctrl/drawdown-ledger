@@ -28,6 +28,8 @@ apps/web/dist/
 playwright-report/
 test-results/
 coverage/
+.playwright-cli/
+output/
 
 # Private market and research data
 /data/
