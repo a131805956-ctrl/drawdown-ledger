@@ -65,7 +65,7 @@ test("AI mode exposes deterministic controls and completes a grid search", async
         ratio_search: {
             minimum_basis_points: 0,
             maximum_basis_points: 10_000,
-            step_basis_points: 1_000,
+            step_basis_points: 5_000,
             monotone: true,
         },
         walk_forward: {
