@@ -1,7 +1,56 @@
+Describe 'Privacy-gated static report publication' {
+BeforeAll {
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $PublishScript = Join-Path $RepositoryRoot 'scripts\Publish-Report.ps1'
 $PrivacyScript = Join-Path $RepositoryRoot 'scripts\Test-PublishedPrivacy.ps1'
 $PythonExecutable = (Get-Command python -ErrorAction Stop).Source
+
+function Assert-Throws {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Action,
+        [string]$ExpectedMessage
+    )
+
+    try {
+        & $Action | Out-Null
+    }
+    catch {
+        if (
+            -not [string]::IsNullOrWhiteSpace($ExpectedMessage) -and
+            $_.Exception.Message -notlike ('*' + $ExpectedMessage + '*')
+        ) {
+            throw (
+                'Expected exception containing "{0}", received "{1}".' -f
+                $ExpectedMessage,
+                $_.Exception.Message
+            )
+        }
+        return
+    }
+    throw 'Expected the action to throw, but it completed successfully.'
+}
+
+function Assert-DoesNotThrow {
+    param([Parameter(Mandatory = $true)][scriptblock]$Action)
+
+    try {
+        & $Action | Out-Null
+    }
+    catch {
+        throw ('Expected no exception, received: ' + $_.Exception.Message)
+    }
+}
+
+function Assert-Equal {
+    param(
+        [Parameter(Mandatory = $true)]$Actual,
+        [Parameter(Mandatory = $true)]$Expected
+    )
+
+    if (-not [object]::Equals($Actual, $Expected)) {
+        throw ('Expected "{0}", received "{1}".' -f $Expected, $Actual)
+    }
+}
 
 function New-TestExportBundle {
     param(
@@ -145,8 +194,8 @@ print(json.dumps({"ExportId": export_id, "Source": str(source)}))
     }
     return ($Generated | ConvertFrom-Json)
 }
+}
 
-Describe 'Privacy-gated static report publication' {
     BeforeEach {
         $PrivateRoot = Join-Path $TestDrive 'private'
         $PublishedRoot = Join-Path $TestDrive 'published'
@@ -154,15 +203,17 @@ Describe 'Privacy-gated static report publication' {
     }
 
     It 'rejects export IDs containing path traversal' {
-        {
+        Assert-Throws -Action {
             & $PublishScript `
                 -ExportId '..\outside' `
                 -PrivateRoot $PrivateRoot `
                 -PublishedRoot $PublishedRoot `
                 -PythonExecutable $PythonExecutable
-        } | Should Throw
+        }
 
-        Test-Path (Join-Path $TestDrive 'outside') | Should Be $false
+        Assert-Equal `
+            -Actual (Test-Path (Join-Path $TestDrive 'outside')) `
+            -Expected $false
     }
 
     It 'blocks a bundle containing an absolute local path' {
@@ -185,15 +236,17 @@ Describe 'Privacy-gated static report publication' {
         $Manifest | ConvertTo-Json -Depth 12 |
             Set-Content -LiteralPath $ManifestPath -Encoding UTF8
 
-        {
+        Assert-Throws -Action {
             & $PublishScript `
                 -ExportId $ExportId `
                 -PrivateRoot $PrivateRoot `
                 -PublishedRoot $PublishedRoot `
                 -PythonExecutable $PythonExecutable
-        } | Should Throw
+        }
 
-        Test-Path (Join-Path $PublishedRoot $ExportId) | Should Be $false
+        Assert-Equal `
+            -Actual (Test-Path (Join-Path $PublishedRoot $ExportId)) `
+            -Expected $false
     }
 
     It 'copies only the explicit validated export ID' {
@@ -210,17 +263,22 @@ Describe 'Privacy-gated static report publication' {
             -PublishedRoot $PublishedRoot `
             -PythonExecutable $PythonExecutable
 
-        $Result.ExportId | Should Be $First.ExportId
-        Test-Path (
-            Join-Path $PublishedRoot ($First.ExportId + '\manifest.json')
-        ) |
-            Should Be $true
-        Test-Path (Join-Path $PublishedRoot $Second.ExportId) | Should Be $false
-        {
+        Assert-Equal -Actual $Result.ExportId -Expected $First.ExportId
+        Assert-Equal `
+            -Actual (
+                Test-Path (
+                    Join-Path $PublishedRoot ($First.ExportId + '\manifest.json')
+                )
+            ) `
+            -Expected $true
+        Assert-Equal `
+            -Actual (Test-Path (Join-Path $PublishedRoot $Second.ExportId)) `
+            -Expected $false
+        Assert-DoesNotThrow -Action {
             & $PrivacyScript `
                 -Path (Join-Path $PublishedRoot $First.ExportId) `
                 -PythonExecutable $PythonExecutable
-        } | Should Not Throw
+        }
     }
 
     It 'rejects an artifact whose SHA-256 or size no longer matches' {
@@ -233,15 +291,17 @@ Describe 'Privacy-gated static report publication' {
             '"summary":"tampered"}') |
             Set-Content -LiteralPath (Join-Path $Source 'report.json') -Encoding UTF8
 
-        {
+        Assert-Throws -Action {
             & $PublishScript `
                 -ExportId $ExportId `
                 -PrivateRoot $PrivateRoot `
                 -PublishedRoot $PublishedRoot `
                 -PythonExecutable $PythonExecutable
-        } | Should Throw
+        }
 
-        Test-Path (Join-Path $PublishedRoot $ExportId) | Should Be $false
+        Assert-Equal `
+            -Actual (Test-Path (Join-Path $PublishedRoot $ExportId)) `
+            -Expected $false
     }
 
     It 'rejects missing or extra files outside the exact artifact set' {
@@ -253,15 +313,17 @@ Describe 'Privacy-gated static report publication' {
         '{"summary":"not declared"}' |
             Set-Content -LiteralPath (Join-Path $Source 'extra.json') -Encoding UTF8
 
-        {
+        Assert-Throws -Action {
             & $PublishScript `
                 -ExportId $ExportId `
                 -PrivateRoot $PrivateRoot `
                 -PublishedRoot $PublishedRoot `
                 -PythonExecutable $PythonExecutable
-        } | Should Throw
+        }
 
-        Test-Path (Join-Path $PublishedRoot $ExportId) | Should Be $false
+        Assert-Equal `
+            -Actual (Test-Path (Join-Path $PublishedRoot $ExportId)) `
+            -Expected $false
     }
 
     It 'rejects invalid schema and result identifiers' {
@@ -278,13 +340,13 @@ Describe 'Privacy-gated static report publication' {
         $Manifest | ConvertTo-Json -Depth 12 |
             Set-Content -LiteralPath $ManifestPath -Encoding UTF8
 
-        {
+        Assert-Throws -Action {
             & $PublishScript `
                 -ExportId $ExportId `
                 -PrivateRoot $PrivateRoot `
                 -PublishedRoot $PublishedRoot `
                 -PythonExecutable $PythonExecutable
-        } | Should Throw
+        }
     }
 
     It 'rejects a source bundle that is a junction outside the private root' {
@@ -297,15 +359,17 @@ Describe 'Privacy-gated static report publication' {
         New-Item -ItemType Junction -Path $Link -Target $OutsideSource |
             Out-Null
 
-        {
+        Assert-Throws -Action {
             & $PublishScript `
                 -ExportId $ExportId `
                 -PrivateRoot $PrivateRoot `
                 -PublishedRoot $PublishedRoot `
                 -PythonExecutable $PythonExecutable
-        } | Should Throw 'Export source contains a symlink, junction, or reparse point.'
+        } -ExpectedMessage 'Export source contains a symlink, junction, or reparse point.'
 
-        Test-Path (Join-Path $PublishedRoot $ExportId) | Should Be $false
+        Assert-Equal `
+            -Actual (Test-Path (Join-Path $PublishedRoot $ExportId)) `
+            -Expected $false
     }
 
     It 'rejects a private root whose ancestor chain contains a junction' {
@@ -321,13 +385,13 @@ Describe 'Privacy-gated static report publication' {
             -Target $ActualPrivateRoot |
             Out-Null
 
-        {
+        Assert-Throws -Action {
             & $PublishScript `
                 -ExportId $ExportId `
                 -PrivateRoot $LinkedPrivateRoot `
                 -PublishedRoot $PublishedRoot `
                 -PythonExecutable $PythonExecutable
-        } | Should Throw 'Private report root contains a symlink, junction, or reparse point.'
+        } -ExpectedMessage 'Private report root contains a symlink, junction, or reparse point.'
     }
 
     It 'rejects a manifest reparse point before reading its outside target' {
@@ -347,14 +411,16 @@ Describe 'Privacy-gated static report publication' {
             -Target $OutsideManifest |
             Out-Null
 
-        {
+        Assert-Throws -Action {
             & $PublishScript `
                 -ExportId $ExportId `
                 -PrivateRoot $PrivateRoot `
                 -PublishedRoot $PublishedRoot `
                 -PythonExecutable $PythonExecutable
-        } | Should Throw 'Export source manifest contains a symlink, junction, or reparse point.'
+        } -ExpectedMessage 'Export source manifest contains a symlink, junction, or reparse point.'
 
-        Test-Path (Join-Path $PublishedRoot $ExportId) | Should Be $false
+        Assert-Equal `
+            -Actual (Test-Path (Join-Path $PublishedRoot $ExportId)) `
+            -Expected $false
     }
 }
