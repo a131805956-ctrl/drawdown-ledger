@@ -12,9 +12,22 @@ import {
 
 import type {
     DataHealthResponse,
+    EvidenceAnalyzeRequest,
+    EvidenceAnalyzeResponse,
     ErrorResponse,
     InstrumentListResponse,
+    JobResponse,
+    MarketSeriesQuery,
+    MarketSeriesResponse,
     MarketOverviewResponse,
+    OptimizationAcceptedResponse,
+    OptimizationCreateRequest,
+    ReportListResponse,
+    ReportResponse,
+    ResultListResponse,
+    ResultResponse,
+    StrategyBacktestRequest,
+    StrategyBacktestResponse,
 } from "./contracts";
 
 const API_VERSION_PATH = "/api/v1";
@@ -23,12 +36,38 @@ export interface ResearchApi {
     getInstruments(this: void): Promise<InstrumentListResponse>;
     getMarketOverview(this: void): Promise<MarketOverviewResponse>;
     getDataHealth(this: void): Promise<DataHealthResponse>;
+    getMarketSeries(
+        this: void,
+        query: MarketSeriesQuery,
+    ): Promise<MarketSeriesResponse>;
+    analyzeEvidence(
+        this: void,
+        request: EvidenceAnalyzeRequest,
+    ): Promise<EvidenceAnalyzeResponse>;
+    backtestStrategy(
+        this: void,
+        request: StrategyBacktestRequest,
+    ): Promise<StrategyBacktestResponse>;
+    createOptimization(
+        this: void,
+        request: OptimizationCreateRequest,
+    ): Promise<OptimizationAcceptedResponse>;
+    getJob(this: void, jobId: string): Promise<JobResponse>;
+    cancelJob(this: void, jobId: string): Promise<JobResponse>;
+    listResults(this: void): Promise<ResultListResponse>;
+    getResult(this: void, resultId: string): Promise<ResultResponse>;
+    listReports(this: void): Promise<ReportListResponse>;
+    getReport(this: void, reportId: string): Promise<ReportResponse>;
 }
 
 export interface StaticResearchSnapshot {
     instruments: InstrumentListResponse;
     overview: MarketOverviewResponse;
     health: DataHealthResponse;
+    evidence?: EvidenceAnalyzeResponse;
+    marketSeries?: MarketSeriesResponse;
+    results?: ResultListResponse;
+    reports?: ReportListResponse;
 }
 
 export type DataCapability =
@@ -59,9 +98,17 @@ export class ResearchApiError extends Error {
 async function requestJson<T>(
     fetcher: typeof fetch,
     url: string,
+    init: RequestInit = {},
 ): Promise<T> {
     const response = await fetcher(url, {
-        headers: { Accept: "application/json" },
+        ...init,
+        headers: {
+            Accept: "application/json",
+            ...(init.body === undefined
+                ? {}
+                : { "Content-Type": "application/json" }),
+            ...init.headers,
+        },
     });
     if (!response.ok) {
         let detail: ErrorResponse["detail"] | null = null;
@@ -78,6 +125,33 @@ async function requestJson<T>(
         );
     }
     return (await response.json()) as T;
+}
+
+function queryString(query: Record<string, unknown>): string {
+    const parameters = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+        if (
+            typeof value === "string" ||
+            typeof value === "number" ||
+            typeof value === "boolean"
+        ) {
+            parameters.set(key, String(value));
+        } else if (value !== null && value !== undefined) {
+            throw new TypeError(`Unsupported query parameter: ${key}`);
+        }
+    }
+    return parameters.toString();
+}
+
+function jsonRequest<T>(
+    fetcher: typeof fetch,
+    url: string,
+    body: unknown,
+): Promise<T> {
+    return requestJson<T>(fetcher, url, {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
 }
 
 export function createLiveResearchApi(
@@ -102,6 +176,55 @@ export function createLiveResearchApi(
                 fetcher,
                 `${baseUrl}/data/health`,
             ),
+        getMarketSeries: (query) =>
+            requestJson<MarketSeriesResponse>(
+                fetcher,
+                `${baseUrl}/market/series?${queryString(query)}`,
+                { method: "GET" },
+            ),
+        analyzeEvidence: (request) =>
+            jsonRequest<EvidenceAnalyzeResponse>(
+                fetcher,
+                `${baseUrl}/evidence/analyze`,
+                request,
+            ),
+        backtestStrategy: (request) =>
+            jsonRequest<StrategyBacktestResponse>(
+                fetcher,
+                `${baseUrl}/strategies/backtest`,
+                request,
+            ),
+        createOptimization: (request) =>
+            jsonRequest<OptimizationAcceptedResponse>(
+                fetcher,
+                `${baseUrl}/optimizations`,
+                request,
+            ),
+        getJob: (jobId) =>
+            requestJson<JobResponse>(
+                fetcher,
+                `${baseUrl}/jobs/${encodeURIComponent(jobId)}`,
+            ),
+        cancelJob: (jobId) =>
+            jsonRequest<JobResponse>(
+                fetcher,
+                `${baseUrl}/jobs/${encodeURIComponent(jobId)}/cancel`,
+                undefined,
+            ),
+        listResults: () =>
+            requestJson<ResultListResponse>(fetcher, `${baseUrl}/results`),
+        getResult: (resultId) =>
+            requestJson<ResultResponse>(
+                fetcher,
+                `${baseUrl}/results/${encodeURIComponent(resultId)}`,
+            ),
+        listReports: () =>
+            requestJson<ReportListResponse>(fetcher, `${baseUrl}/reports`),
+        getReport: (reportId) =>
+            requestJson<ReportResponse>(
+                fetcher,
+                `${baseUrl}/reports/${encodeURIComponent(reportId)}`,
+            ),
     };
 }
 
@@ -118,7 +241,19 @@ const emptyStaticSnapshot: StaticResearchSnapshot = {
         status: "healthy",
         coverage: [],
     },
+    results: { schema_version: "1.0", results: [] },
+    reports: { schema_version: "1.0", reports: [] },
 };
+
+function unavailableInStaticMode<T>(feature: string): Promise<T> {
+    return Promise.reject(
+        new ResearchApiError(
+            `${feature} is unavailable in the static snapshot`,
+            405,
+            null,
+        ),
+    );
+}
 
 export function createStaticResearchApi(
     snapshot: StaticResearchSnapshot = emptyStaticSnapshot,
@@ -127,6 +262,36 @@ export function createStaticResearchApi(
         getInstruments: () => Promise.resolve(snapshot.instruments),
         getMarketOverview: () => Promise.resolve(snapshot.overview),
         getDataHealth: () => Promise.resolve(snapshot.health),
+        getMarketSeries: () =>
+            snapshot.marketSeries === undefined
+                ? unavailableInStaticMode("Market series")
+                : Promise.resolve(snapshot.marketSeries),
+        analyzeEvidence: () =>
+            snapshot.evidence === undefined
+                ? unavailableInStaticMode("Evidence analysis")
+                : Promise.resolve(snapshot.evidence),
+        backtestStrategy: () =>
+            unavailableInStaticMode("Strategy backtesting"),
+        createOptimization: () =>
+            unavailableInStaticMode("Optimization"),
+        getJob: () => unavailableInStaticMode("Jobs"),
+        cancelJob: () => unavailableInStaticMode("Jobs"),
+        listResults: () =>
+            Promise.resolve(
+                snapshot.results ?? {
+                    schema_version: "1.0",
+                    results: [],
+                },
+            ),
+        getResult: () => unavailableInStaticMode("Result detail"),
+        listReports: () =>
+            Promise.resolve(
+                snapshot.reports ?? {
+                    schema_version: "1.0",
+                    reports: [],
+                },
+            ),
+        getReport: () => unavailableInStaticMode("Report detail"),
     };
 }
 

@@ -1,7 +1,12 @@
-import { Route, Routes } from "../lib/router";
+import {
+    Route,
+    Routes,
+    useSearchParams,
+} from "../lib/router";
 
 import { AppShell } from "../components/AppShell";
 import { DataHealthPage } from "../pages/DataHealthPage";
+import { EvidencePage } from "../pages/EvidencePage";
 import { MarketOverviewPage } from "../pages/MarketOverviewPage";
 
 interface PlaceholderPageProps {
@@ -34,6 +39,12 @@ function PlaceholderPage({
     );
 }
 
+function EvidenceRoute() {
+    const [parameters] = useSearchParams();
+    const family = parameters.get("family") ?? "nasdaq-100";
+    return <EvidencePage key={family} />;
+}
+
 export function AppRoutes() {
     return (
         <Routes>
@@ -41,13 +52,7 @@ export function AppRoutes() {
                 <Route index element={<MarketOverviewPage />} />
                 <Route
                     path="evidence"
-                    element={
-                        <PlaceholderPage
-                            title="歷史證據"
-                            eyebrow="Evidence workbench"
-                            message="下一階段將接入獨立回撤事件、每日重疊樣本與次日開盤證據。"
-                        />
-                    }
+                    element={<EvidenceRoute />}
                 />
                 <Route
                     path="strategy"

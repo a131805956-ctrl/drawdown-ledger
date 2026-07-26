@@ -8,7 +8,10 @@ import type {
     InstrumentListResponse,
     MarketOverviewResponse,
 } from "../src/lib/contracts";
-import type { ResearchApi } from "../src/lib/api";
+import {
+    createStaticResearchApi,
+    type ResearchApi,
+} from "../src/lib/api";
 
 const instruments: InstrumentListResponse = {
     schema_version: "1.0",
@@ -52,12 +55,14 @@ const health: DataHealthResponse = {
             cached: true,
             actual_last_session: "2026-06-30",
             policy_cutoff: "2026-06-30",
+            roles: ["tradable", "prototype_proxy"],
         },
         {
             symbol: "TQQQ",
             cached: false,
             actual_last_session: null,
             policy_cutoff: "2026-06-30",
+            roles: ["tradable"],
         },
     ],
 };
@@ -70,6 +75,11 @@ function apiWith(
     } = {},
 ): ResearchApi {
     return {
+        ...createStaticResearchApi({
+            instruments: values.instruments ?? instruments,
+            overview: values.overview ?? overview,
+            health: values.health ?? health,
+        }),
         getInstruments: vi
             .fn()
             .mockResolvedValue(values.instruments ?? instruments),
@@ -156,6 +166,7 @@ describe("data health route", () => {
                             cached: true,
                             actual_last_session: "2026-02-27",
                             policy_cutoff: "2026-02-28",
+                            roles: ["tradable", "prototype_proxy"],
                         },
                     ],
                 },

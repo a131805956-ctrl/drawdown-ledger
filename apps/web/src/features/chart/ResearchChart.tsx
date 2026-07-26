@@ -211,7 +211,11 @@ export function ResearchChart({
 
     useEffect(() => {
         const container = containerRef.current;
-        if (container === null || renderedPrototypePoints.length === 0) {
+        if (
+            container === null ||
+            renderedPrototypePoints.length === 0 ||
+            typeof globalThis.ResizeObserver === "undefined"
+        ) {
             return;
         }
         const chart = createChart(container, {
@@ -391,7 +395,7 @@ export function ResearchChart({
             );
         };
         chart.subscribeClick(clickHandler);
-        const observer = new ResizeObserver((entries) => {
+        const observer = new globalThis.ResizeObserver((entries) => {
             const width = entries[0]?.contentRect.width;
             if (width !== undefined && width > 0) {
                 chart.resize(width, height);

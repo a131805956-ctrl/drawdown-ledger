@@ -5,10 +5,37 @@
 
 export interface components {
     "schemas": {
+        "BonusContributionEventInput": {
+            "amount": number | string;
+            "kind": "bonus";
+            "month": string;
+        };
+        "ChartPointResponse": {
+            "close": number;
+            "drawdown": number;
+            "high": number | null;
+            "low": number | null;
+            "normalized_total_return": number;
+            "open": number | null;
+            "session": string;
+            "total_return_close": number;
+        };
+        "ChartSeriesResponse": {
+            "actual_last_session": string | null;
+            "currency": string | null;
+            "leverage": number;
+            "points": Array<components["schemas"]["ChartPointResponse"]>;
+            "policy_cutoff": string | null;
+            "source_kind": "actual" | "synthetic";
+            "symbol": string;
+            "unit": "price" | "index";
+        };
+        "ContributionEventInput": components["schemas"]["BonusContributionEventInput"] | components["schemas"]["OverrideContributionEventInput"] | components["schemas"]["PauseContributionEventInput"] | components["schemas"]["ResumeContributionEventInput"];
         "DataCoverageResponse": {
             "actual_last_session": string | null;
             "cached": boolean;
             "policy_cutoff": string | null;
+            "roles": Array<"tradable" | "prototype" | "prototype_proxy">;
             "symbol": string;
         };
         "DataHealthResponse": {
@@ -28,6 +55,23 @@ export interface components {
             "schema_version"?: "1.0";
             "status": "completed" | "not_configured";
         };
+        "EpisodeTraceResponse": {
+            "cycle_id": number;
+            "entry_date": string | null;
+            "entry_price": string | null;
+            "forward_returns": Array<components["schemas"]["ForwardReturnResponse"]>;
+            "mae": number | null;
+            "mfe": number | null;
+            "peak_date": string;
+            "peak_price": number;
+            "recovery_date": string | null;
+            "recovery_sessions": number | null;
+            "signal_date": string;
+            "signal_drawdown": number;
+            "signal_price": number;
+            "threshold": number;
+            "v_recovered": boolean;
+        };
         "ErrorResponse": {
             "detail": string | Array<components["schemas"]["ValidationIssue"]>;
             "schema_version"?: "1.0";
@@ -42,10 +86,26 @@ export interface components {
         "EvidenceAnalyzeResponse": {
             "daily_statistics": Array<components["schemas"]["HorizonStatisticsResponse"]>;
             "episode_statistics": Array<components["schemas"]["HorizonStatisticsResponse"]>;
+            "episodes": Array<components["schemas"]["EpisodeTraceResponse"]>;
+            "family_id": string;
             "n_day": number;
             "n_episode": number;
             "n_executed_episode": number;
+            "prototype_actual_last_session": string | null;
+            "prototype_policy_cutoff": string | null;
+            "prototype_source": "benchmark" | "proxy";
+            "prototype_symbol": string;
             "schema_version"?: "1.0";
+            "source_kind"?: "actual";
+            "source_label"?: "trusted_local_cache";
+            "target_actual_last_session": string | null;
+            "target_policy_cutoff": string | null;
+            "target_symbol": string;
+        };
+        "ForwardReturnResponse": {
+            "exit_date": string | null;
+            "horizon_sessions": number;
+            "total_return": number | null;
         };
         "HorizonStatisticsResponse": {
             "confidence_lower": number | null;
@@ -103,6 +163,18 @@ export interface components {
             "formal_result_count": number;
             "instrument_count": number;
             "schema_version"?: "1.0";
+        };
+        "MarketSeriesResponse": {
+            "actual": components["schemas"]["ChartSeriesResponse"];
+            "family_id": string;
+            "handoff_session": string | null;
+            "prototype": components["schemas"]["ChartSeriesResponse"];
+            "prototype_source": "benchmark" | "proxy";
+            "prototype_symbol": string;
+            "schema_version"?: "1.0";
+            "source_label"?: "trusted_local_cache";
+            "synthetic": components["schemas"]["ChartSeriesResponse"] | null;
+            "target_symbol": string;
         };
         "OptimizationAcceptedResponse": {
             "job_id": string;
@@ -163,6 +235,16 @@ export interface components {
             "schema_version"?: "1.0";
             "synthetic_stress": components["schemas"]["SyntheticStressSummaryResponse"];
         };
+        "OverrideContributionEventInput": {
+            "amount": number | string;
+            "kind": "override";
+            "month": string;
+        };
+        "PauseContributionEventInput": {
+            "amount"?: number | string;
+            "kind": "pause";
+            "month": string;
+        };
         "PerformanceResponse": {
             "cash_depletion_date": string | null;
             "deepest_tier_missed": string | null;
@@ -171,6 +253,16 @@ export interface components {
             "max_drawdown": number;
             "twr": number;
             "xirr": number | null;
+        };
+        "PortfolioPointResponse": {
+            "cash": string;
+            "close": string;
+            "date": string;
+            "external_flow": string;
+            "net_contributions": string;
+            "profit_loss": string;
+            "shares": string;
+            "value": string;
         };
         "ProfileConstraintsInput": {
             "max_early_depletion_rate": number;
@@ -220,10 +312,16 @@ export interface components {
             "payload": components["schemas"]["OptimizationResultPayload"] | components["schemas"]["LegacyOptimizationPayload"];
             "schema_version"?: "1.0";
         };
+        "ResumeContributionEventInput": {
+            "amount"?: number | string;
+            "kind": "resume";
+            "month": string;
+        };
         "StrategyBacktestRequest": {
             "annual_contribution_growth"?: number | string;
             "cash_interest_rate"?: number | string;
             "contribution_day"?: number;
+            "contribution_events"?: Array<components["schemas"]["ContributionEventInput"]>;
             "dividend_policy"?: "cash" | "reinvest";
             "end": string;
             "family_id": string;
@@ -240,19 +338,36 @@ export interface components {
             "tiers": Array<components["schemas"]["StrategyTierInput"]>;
         };
         "StrategyBacktestResponse": {
+            "contribution_total": string;
+            "dividend_income": string;
             "ending_cash": string;
             "ending_shares": string;
+            "equity_curve": Array<components["schemas"]["PortfolioPointResponse"]>;
+            "family_id": string;
+            "interest_income": string;
             "metrics": components["schemas"]["PerformanceResponse"] | null;
             "missed_thresholds": Array<string>;
             "name": string;
             "pending_thresholds": Array<string>;
+            "prototype_actual_last_session": string | null;
+            "prototype_policy_cutoff": string | null;
+            "prototype_source": "benchmark" | "proxy";
+            "prototype_symbol": string;
             "schema_version"?: "1.0";
+            "source_kind"?: "actual";
+            "source_label"?: "trusted_local_cache";
+            "target_actual_last_session": string | null;
+            "target_policy_cutoff": string | null;
+            "target_symbol": string;
+            "total_fees": string;
             "trade_count": number;
+            "trades": Array<components["schemas"]["TradeResponse"]>;
         };
         "StrategyTemplateInput": {
             "annual_contribution_growth"?: number | string;
             "cash_interest_rate"?: number | string;
             "contribution_day"?: number;
+            "contribution_events"?: Array<components["schemas"]["ContributionEventInput"]>;
             "dividend_policy"?: "cash" | "reinvest";
             "end": string;
             "fee_rate"?: number | string;
@@ -277,6 +392,21 @@ export interface components {
             "evaluated_candidates": number;
             "passed_candidates": number;
             "requested": boolean;
+        };
+        "TradeResponse": {
+            "cash_spent": string;
+            "date": string;
+            "execution_price": string;
+            "fee": string;
+            "kind": "buy" | "reinvest" | "dca" | "buy-and-hold";
+            "marker_profit_loss": string;
+            "post_trade_cash": string;
+            "prototype_drawdown": string | null;
+            "raw_price": string;
+            "shares_bought": string;
+            "signal_date": string;
+            "target_drawdown": string | null;
+            "threshold": string | null;
         };
         "ValidationIssue": {
             "input_json"?: string | null;
@@ -393,6 +523,28 @@ export interface paths {
                 requestBody: never;
                 responses: {
                     "200": components["schemas"]["MarketOverviewResponse"];
+                    "404": components["schemas"]["ErrorResponse"];
+                    "409": components["schemas"]["ErrorResponse"];
+                    "422": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    "/api/v1/market/series": {
+            get: {
+                parameters: {
+                "query": {
+                        "annual_expense_ratio"?: number;
+                        "end"?: string | null;
+                        "family_id": string;
+                        "include_synthetic"?: boolean;
+                        "max_points"?: number;
+                        "start"?: string | null;
+                        "target_symbol": string;
+                    };
+            };
+                requestBody: never;
+                responses: {
+                    "200": components["schemas"]["MarketSeriesResponse"];
                     "404": components["schemas"]["ErrorResponse"];
                     "409": components["schemas"]["ErrorResponse"];
                     "422": components["schemas"]["ErrorResponse"];
