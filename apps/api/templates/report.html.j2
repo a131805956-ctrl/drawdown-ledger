@@ -63,7 +63,11 @@
     }
   </style>
 </head>
-<body>
+<body
+  data-result-id="{{ result_id }}"
+  data-schema-version="{{ schema_version }}"
+  data-stored-schema-version="{{ stored_schema_version }}"
+>
   <main>
     <header>
       <div class="eyebrow">DRAWDOWN LEDGER · TRACEABLE EXPORT</div>
@@ -109,7 +113,10 @@
 
     <section>
       <h2>正式結果</h2>
-      <pre>{{ report_json }}</pre>
+      <pre
+        id="drawdown-canonical-report"
+        data-content-type="application/json"
+      >{{ report_json }}</pre>
     </section>
 
     <section>

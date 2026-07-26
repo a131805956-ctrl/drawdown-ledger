@@ -44,6 +44,7 @@ def test_openapi_advertises_explicit_formal_result_and_report_models(
         "LegacyOptimizationPayload",
     }
     assert report_content_refs == {
+        "ExportedReportContentResponse",
         "ReportContentResponse",
         "LegacyReportContent",
     }

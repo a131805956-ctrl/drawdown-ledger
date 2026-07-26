@@ -22,6 +22,7 @@ def _write_export_bundle(
         "recommendations": [],
         "schema_version": "1.0",
         "summary": "public-safe",
+        "trades": [],
     }
     persisted_parameters = parameters or {"family_id": "nasdaq-100"}
     lineage = {
@@ -78,6 +79,7 @@ def _write_export_bundle(
         "schema_version": report_schema_version,
         "stored_schema_version": report_schema_version,
         "title": "Optimization research result",
+        "trades": [],
     }
     canonical_seed = (
         json.dumps(
@@ -224,6 +226,38 @@ def test_normalized_private_csv_headers_fail_closed(
 ) -> None:
     report = tmp_path / "report.csv"
     report.write_text(f"{header},score\nredacted,1\n", encoding="utf-8")
+
+    result = privacy_scan(report)
+
+    assert result.allowed is False
+    assert expected_code in {finding.code for finding in result.findings}
+
+
+@pytest.mark.parametrize(
+    ("field_name", "expected_code"),
+    [
+        ("ｆｕｌｌｎａｍｅ", "private_field"),
+        ("ａｐｉ＿ｋｅｙ", "secret"),
+    ],
+)
+@pytest.mark.parametrize("artifact_kind", ["json", "csv"])
+def test_nfkc_compatible_private_and_secret_aliases_fail_closed(
+    tmp_path: Path,
+    field_name: str,
+    expected_code: str,
+    artifact_kind: str,
+) -> None:
+    report = tmp_path / f"report.{artifact_kind}"
+    if artifact_kind == "json":
+        report.write_text(
+            json.dumps({field_name: "redacted"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    else:
+        report.write_text(
+            f"{field_name},score\nredacted,1\n",
+            encoding="utf-8",
+        )
 
     result = privacy_scan(report)
 
@@ -517,3 +551,15 @@ def test_fixed_demo_is_versioned_non_live_and_matches_manifest_hash() -> None:
     assert evidence["fixed_data_date"] == "2026-07-31"
     assert evidence["sample_warning"]
     assert privacy_scan(demo_root).allowed is True
+
+
+def test_report_authenticity_boundary_is_documented_without_signature_claim() -> None:
+    repository_root = Path(__file__).parents[4]
+    documentation = (repository_root / "README.md").read_text(
+        encoding="utf-8"
+    ).lower()
+
+    assert "not cryptographic signatures" in documentation
+    assert "git commit" in documentation
+    assert "reviewed branch and pr" in documentation
+    assert "release tag" in documentation

@@ -89,6 +89,18 @@ canonical 匯出。持續整合（CI）會逐一驗證 bundle；Pages 只會將�
 公開報告清單。外部真實性邊界是受保護的 Git 提交、PR 與版本標籤，
 匯出 bundle 本身不是獨立的密碼學簽章。
 
+## Report authenticity boundary
+
+The manifest hashes, cross-format checks, and content-addressed export ID detect
+partial or accidental bundle changes. They are not cryptographic signatures
+because the local exporter has no secret signing key.
+
+Treat Git provenance as the external authenticity boundary. Verify the
+report's Git commit (`git_commit`) against the reviewed branch and PR, its
+successful CI run, and the expected release tag before treating a published
+report as an authentic project output. A coordinated rewrite of the complete
+bundle and its provenance cannot be authenticated by local hashes alone.
+
 ## 開發與驗證
 
 Python 使用非 editable 安裝，避免中文 Windows 路徑造成 `.pth` 解碼錯誤。

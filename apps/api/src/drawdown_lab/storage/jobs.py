@@ -780,6 +780,53 @@ class JobStore:
             raise KeyError(report_id)
         return self._report_from_row(row)
 
+    def mark_report_exported(
+        self,
+        result_id: str,
+        *,
+        content: Mapping[str, object],
+    ) -> ReportRecord:
+        """Persist a completed export only after its bundle is ready."""
+
+        raw_content = deterministic_json(content)
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT id, schema_version, export_status, content_json "
+                "FROM reports WHERE result_id = ? ORDER BY id",
+                (result_id,),
+            ).fetchall()
+            if not rows:
+                raise KeyError(result_id)
+            if len(rows) != 1:
+                raise RuntimeError(
+                    "Persisted result must have exactly one corresponding report"
+                )
+            row = rows[0]
+            if str(row["schema_version"]) != SCHEMA_VERSION:
+                raise ValueError("Unsupported persisted report schema version")
+            report_id = str(row["id"])
+            already_persisted = (
+                str(row["export_status"]) == "exported"
+                and str(row["content_json"]) == raw_content
+            )
+            if not already_persisted:
+                cursor = connection.execute(
+                    """
+                    UPDATE reports
+                    SET export_status = 'exported', content_json = ?
+                    WHERE id = ?
+                      AND result_id = ?
+                      AND schema_version = ?
+                    """,
+                    (raw_content, report_id, result_id, SCHEMA_VERSION),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        "Persisted report export transition failed"
+                    )
+        return self.get_report(report_id)
+
     @staticmethod
     def _result_from_row(row: Any) -> ResultRecord:
         raw_json = str(row["payload_json"])
@@ -915,9 +962,13 @@ class JobService:
             prototype, prototype_snapshot = self.data_catalog.read_verified(
                 request.prototype_symbol
             )
-            traded, target_snapshot = self.data_catalog.read_verified(
-                request.target_symbol
-            )
+            if request.target_symbol == request.prototype_symbol:
+                traded = prototype
+                target_snapshot = prototype_snapshot
+            else:
+                traded, target_snapshot = self.data_catalog.read_verified(
+                    request.target_symbol
+                )
 
             def on_batch(completed: int, _: int) -> bool:
                 self.store.update_progress(

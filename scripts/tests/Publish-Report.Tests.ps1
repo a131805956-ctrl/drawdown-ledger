@@ -74,6 +74,7 @@ result = {
     "recommendations": [],
     "schema_version": "1.0",
     "summary": "fixed public-safe research fixture",
+    "trades": [],
 }
 result_bytes = json.dumps(
     result,
@@ -128,6 +129,7 @@ seed = {
     "schema_version": "1.0",
     "stored_schema_version": "1.0",
     "title": "Optimization research result",
+    "trades": [],
 }
 seed_bytes = (
     json.dumps(seed, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

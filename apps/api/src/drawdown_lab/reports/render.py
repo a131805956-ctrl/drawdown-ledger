@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import importlib.metadata
-import io
 import json
-import math
 import os
 import re
 import shutil
@@ -16,20 +13,35 @@ import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
-from enum import Enum
 from pathlib import Path
 from uuid import uuid4
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-
 from drawdown_lab.data.catalog import DataIntegrityError
+from drawdown_lab.reports.canonical import (
+    CANDIDATE_FIELDS as _CANDIDATE_FIELDS,
+)
+from drawdown_lab.reports.canonical import (
+    RECOMMENDATION_FIELDS as _RECOMMENDATION_FIELDS,
+)
+from drawdown_lab.reports.canonical import (
+    TRADE_FIELDS as _TRADE_FIELDS,
+)
+from drawdown_lab.reports.canonical import (
+    canonical_csv_bytes as _csv_bytes,
+)
+from drawdown_lab.reports.canonical import (
+    canonical_json_bytes as _json_bytes,
+)
+from drawdown_lab.reports.canonical import (
+    canonical_jsonable as _jsonable,
+)
 from drawdown_lab.reports.models import (
     ExportManifest,
     ReportArtifact,
     ReportDataLineage,
     ReportProvenance,
 )
+from drawdown_lab.reports.render_html import canonical_report_html
 from drawdown_lab.storage.jobs import JobStatus, JobStore, ResultRecord
 
 _SUPPORTED_FORMATS = frozenset({"csv", "html", "json"})
@@ -43,129 +55,8 @@ _MEDIA_TYPES = {
     "html": "text/html; charset=utf-8",
     "json": "application/json",
     "recommendations_csv": "text/csv; charset=utf-8",
+    "trades_csv": "text/csv; charset=utf-8",
 }
-_CANDIDATE_FIELDS = (
-    "ratios",
-    "fold_oos_xirr",
-    "oos_xirr",
-    "stability_score",
-    "stability_adjusted_xirr",
-    "neighbor_count",
-    "worst_5_return",
-    "early_depletion_rate",
-    "longest_trap_days",
-    "synthetic_stress_pass",
-    "pareto_member",
-    "recommendation_labels",
-    "fold_evaluations",
-    "walk_forward_eligible",
-)
-_RECOMMENDATION_FIELDS = (
-    "profile",
-    "ratios",
-    "oos_xirr",
-    "stability_adjusted_xirr",
-)
-
-
-def _jsonable(value: object) -> object:
-    if value is None or isinstance(value, (bool, int, str)):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("Report payload cannot contain non-finite floats")
-        return value
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, datetime):
-        if value.utcoffset() is None:
-            raise ValueError("Report datetimes must be timezone-aware")
-        return value.isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    if isinstance(value, Enum):
-        return _jsonable(value.value)
-    if isinstance(value, Mapping):
-        normalized: dict[str, object] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("Report mapping keys must be strings")
-            normalized[key] = _jsonable(item)
-        return dict(sorted(normalized.items()))
-    if isinstance(value, Sequence) and not isinstance(
-        value,
-        (bytes, bytearray, str),
-    ):
-        return [_jsonable(item) for item in value]
-    raise TypeError(f"Unsupported report payload type: {type(value).__name__}")
-
-
-def _json_bytes(value: object) -> bytes:
-    return (
-        json.dumps(
-            _jsonable(value),
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def _csv_cell(value: object) -> str:
-    normalized = _jsonable(value)
-    if normalized is None:
-        return ""
-    if isinstance(normalized, (dict, list)):
-        return json.dumps(
-            normalized,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    if isinstance(normalized, bool):
-        return "true" if normalized else "false"
-    return str(normalized)
-
-
-def _csv_bytes(
-    rows: Sequence[Mapping[str, object]],
-    *,
-    empty_fields: Sequence[str],
-) -> bytes:
-    normalized_rows = [dict(row) for row in rows]
-    fields = sorted(
-        {key for row in normalized_rows for key in row}
-        or set(empty_fields)
-    )
-    stream = io.StringIO(newline="")
-    if fields:
-        writer = csv.DictWriter(
-            stream,
-            fieldnames=fields,
-            extrasaction="raise",
-            lineterminator="\n",
-        )
-        writer.writeheader()
-        for row in normalized_rows:
-            writer.writerow({field: _csv_cell(row.get(field)) for field in fields})
-    return stream.getvalue().encode("utf-8")
-
-
-def _template_environment() -> Environment:
-    package_template_root = Path(__file__).parents[1] / "templates"
-    checkout_template_root = Path(__file__).parents[3] / "templates"
-    return Environment(
-        loader=FileSystemLoader(
-            [str(package_template_root), str(checkout_template_root)]
-        ),
-        autoescape=select_autoescape(("html", "xml")),
-        undefined=StrictUndefined,
-        keep_trailing_newline=True,
-        newline_sequence="\n",
-    )
-
-
 def _artifact(relative_path: str, media_type: str, content: bytes) -> ReportArtifact:
     return ReportArtifact(
         relative_path=relative_path,
@@ -243,10 +134,12 @@ def _render_report(
     result = record.payload
     candidates = _stored_rows(result, "candidates")
     recommendations = _stored_rows(result, "recommendations")
+    trades = _stored_rows(result, "trades")
     normalized_title = f"{record.kind.replace('_', ' ').title()} research result"
     normalized_result = _jsonable(result)
     normalized_candidates = _jsonable(candidates)
     normalized_recommendations = _jsonable(recommendations)
+    normalized_trades = _jsonable(trades)
     seed = {
         "disclaimer": _DISCLAIMER,
         "candidates": normalized_candidates,
@@ -258,6 +151,7 @@ def _render_report(
         "stored_schema_version": record.schema_version,
         "title": normalized_title,
         "recommendations": normalized_recommendations,
+        "trades": normalized_trades,
     }
     contents: dict[str, tuple[str, bytes]] = {}
     if "csv" in requested_formats:
@@ -272,29 +166,15 @@ def _render_report(
                 empty_fields=_RECOMMENDATION_FIELDS,
             ),
         )
-    if "html" in requested_formats:
-        template = _template_environment().get_template("report.html.j2")
-        html = template.render(
-            disclaimer=_DISCLAIMER,
-            candidates=normalized_candidates,
-            lineage=provenance.as_dict(),
-            parameters_json=json.dumps(
-                provenance.as_dict()["parameters"],
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            ),
-            report_json=json.dumps(
-                normalized_result,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            ),
-            result_id=normalized_result_id,
-            title=normalized_title,
-            recommendations=normalized_recommendations,
+        contents["trades_csv"] = (
+            "trades.csv",
+            _csv_bytes(trades, empty_fields=_TRADE_FIELDS),
         )
-        contents["html"] = ("report.html", html.encode("utf-8"))
+    if "html" in requested_formats:
+        contents["html"] = (
+            "report.html",
+            canonical_report_html(seed),
+        )
 
     identity_contents = {
         relative_path: content
@@ -705,4 +585,25 @@ class ReportExporter:
                 "Synthetic stress results, when requested, remain separate from actual history.",
             ),
         )
-        return _render_report(record, provenance, self.output_root, formats)
+        manifest = _render_report(record, provenance, self.output_root, formats)
+        manifest_document = manifest.as_dict()
+        artifacts = manifest_document["artifacts"]
+        lineage_document = manifest_document["lineage"]
+        if not isinstance(artifacts, Mapping) or not isinstance(
+            lineage_document,
+            Mapping,
+        ):
+            raise RuntimeError("Rendered report manifest is invalid")
+        self.job_store.mark_report_exported(
+            normalized_result_id,
+            content={
+                "artifacts": artifacts,
+                "export_id": manifest.export_id,
+                "lineage": lineage_document,
+                "message": "Report export is ready.",
+                "optimization": record.payload,
+                "result_id": normalized_result_id,
+                "status": "exported",
+            },
+        )
+        return manifest
