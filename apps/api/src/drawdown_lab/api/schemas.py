@@ -828,6 +828,16 @@ class ReportContentResponse(ApiModel):
     optimization: OptimizationResultPayload
 
 
+class ExportedReportContentResponse(ApiModel):
+    status: Literal["exported"]
+    message: str
+    result_id: str
+    export_id: str
+    artifacts: dict[str, ReportArtifactResponse]
+    lineage: ReportLineageResponse
+    optimization: OptimizationResultPayload
+
+
 class LegacyReportContent(ApiModel):
     content_type: Literal["legacy"] = "legacy"
     stored_schema_version: str
@@ -839,7 +849,11 @@ class ReportResponse(VersionedModel):
     result_id: str | None
     title: str
     export_status: Literal["not_yet_exported", "exported"]
-    content: ReportContentResponse | LegacyReportContent
+    content: (
+        ReportContentResponse
+        | ExportedReportContentResponse
+        | LegacyReportContent
+    )
     created_at: str
 
     @classmethod
@@ -849,13 +863,22 @@ class ReportResponse(VersionedModel):
             record.export_status,
         )
         if record.schema_version != SCHEMA_VERSION:
-            content: ReportContentResponse | LegacyReportContent = LegacyReportContent(
+            content: (
+                ReportContentResponse
+                | ExportedReportContentResponse
+                | LegacyReportContent
+            ) = LegacyReportContent(
                 stored_schema_version=record.schema_version,
                 raw_json=record.raw_json,
             )
         else:
             try:
-                content = ReportContentResponse.model_validate(record.content)
+                if record.export_status == "exported":
+                    content = ExportedReportContentResponse.model_validate(
+                        record.content
+                    )
+                else:
+                    content = ReportContentResponse.model_validate(record.content)
             except ValidationError:
                 content = LegacyReportContent(
                     stored_schema_version=record.schema_version,

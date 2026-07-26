@@ -9,11 +9,21 @@ import json
 import os
 import re
 import stat
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import urlparse
+
+from drawdown_lab.reports.canonical import (
+    CANDIDATE_FIELDS,
+    RECOMMENDATION_FIELDS,
+    TRADE_FIELDS,
+    canonical_csv_bytes,
+)
+from drawdown_lab.reports.render_html import canonical_report_html
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +113,7 @@ _ALLOWED_EXPORT_ARTIFACTS: Mapping[str, tuple[str, str]] = {
     "html": ("report.html", "text/html; charset=utf-8"),
     "json": ("report.json", "application/json"),
     "recommendations_csv": ("recommendations.csv", "text/csv; charset=utf-8"),
+    "trades_csv": ("trades.csv", "text/csv; charset=utf-8"),
 }
 _ALLOWED_SUFFIXES = frozenset({".csv", ".html", ".json"})
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -162,7 +173,12 @@ def _is_numeric(value: str) -> bool:
 
 
 def _normalized_field_name(value: str) -> str:
-    snake_case = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value.strip())
+    compatibility_normalized = unicodedata.normalize("NFKC", value).strip()
+    snake_case = re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])",
+        "_",
+        compatibility_normalized,
+    )
     return re.sub(r"[^A-Za-z0-9]+", "_", snake_case).strip("_").lower()
 
 
@@ -358,6 +374,107 @@ def _scan_file(path: Path, relative_path: str) -> tuple[PrivacyFinding, ...]:
 
 def _simple_finding(code: str, relative_path: str) -> PrivacyFinding:
     return PrivacyFinding(code=code, relative_path=relative_path, line=1, column=1)
+
+
+class _CanonicalReportHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.body_attributes: list[dict[str, str | None]] = []
+        self.canonical_attributes: list[dict[str, str | None]] = []
+        self.canonical_fragments: list[str] = []
+        self.in_canonical = False
+        self.invalid_structure = False
+
+    @staticmethod
+    def _attributes(
+        attributes: list[tuple[str, str | None]],
+    ) -> dict[str, str | None]:
+        return dict(attributes)
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attributes: list[tuple[str, str | None]],
+    ) -> None:
+        normalized_tag = tag.lower()
+        attribute_map = self._attributes(attributes)
+        if len(attribute_map) != len(attributes):
+            self.invalid_structure = True
+        if normalized_tag == "body":
+            self.body_attributes.append(attribute_map)
+        if attribute_map.get("id") == "drawdown-canonical-report":
+            if normalized_tag != "pre" or self.in_canonical:
+                self.invalid_structure = True
+            self.canonical_attributes.append(attribute_map)
+            self.in_canonical = True
+        elif self.in_canonical:
+            self.invalid_structure = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.in_canonical:
+            if tag.lower() == "pre":
+                self.in_canonical = False
+            else:
+                self.invalid_structure = True
+
+    def handle_data(self, data: str) -> None:
+        if self.in_canonical:
+            self.canonical_fragments.append(data)
+
+
+def _html_binding_findings(
+    content: bytes,
+    report_document: Mapping[str, object],
+    relative_path: str,
+) -> tuple[PrivacyFinding, ...]:
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return (_simple_finding("artifact_rows_mismatch", relative_path),)
+    parser = _CanonicalReportHTMLParser()
+    try:
+        parser.feed(text)
+        parser.close()
+    except Exception:
+        return (_simple_finding("artifact_rows_mismatch", relative_path),)
+    expected_body = {
+        "data-result-id": report_document.get("result_id"),
+        "data-schema-version": report_document.get("schema_version"),
+        "data-stored-schema-version": report_document.get(
+            "stored_schema_version"
+        ),
+    }
+    identifier_mismatch = (
+        len(parser.body_attributes) != 1
+        or parser.body_attributes[0] != expected_body
+    )
+    expected_canonical_attributes = {
+        "data-content-type": "application/json",
+        "id": "drawdown-canonical-report",
+    }
+    report_seed = dict(report_document)
+    report_seed.pop("export_id", None)
+    payload_mismatch = (
+        parser.invalid_structure
+        or parser.in_canonical
+        or len(parser.canonical_attributes) != 1
+        or parser.canonical_attributes[0] != expected_canonical_attributes
+    )
+    if not payload_mismatch:
+        try:
+            embedded = json.loads("".join(parser.canonical_fragments).strip())
+        except json.JSONDecodeError:
+            payload_mismatch = True
+        else:
+            payload_mismatch = embedded != report_seed
+    findings: list[PrivacyFinding] = []
+    if identifier_mismatch:
+        findings.append(
+            _simple_finding("artifact_identifier_mismatch", relative_path)
+        )
+    if payload_mismatch:
+        findings.append(_simple_finding("artifact_rows_mismatch", relative_path))
+    return tuple(findings)
 
 
 def _link_code(path: Path) -> str | None:
@@ -649,14 +766,17 @@ def _export_manifest_findings(
         validated.append((expected_path, size_bytes, digest.lower()))
 
     artifact_names = set(artifacts)
-    has_csv_pair = {
+    has_csv_set = {
         "candidates_csv",
         "recommendations_csv",
+        "trades_csv",
     } <= artifact_names
     if (
         "json" not in artifact_names
         or ("candidates_csv" in artifact_names)
         != ("recommendations_csv" in artifact_names)
+        or ("candidates_csv" in artifact_names)
+        != ("trades_csv" in artifact_names)
     ):
         findings.append(_simple_finding("invalid_artifact_set", "manifest.json"))
     if actual_paths != frozenset(expected_paths):
@@ -703,6 +823,7 @@ def _export_manifest_findings(
                 "schema_version",
                 "stored_schema_version",
                 "title",
+                "trades",
             }:
                 findings.append(
                     _simple_finding("invalid_report_schema", relative_path)
@@ -727,6 +848,11 @@ def _export_manifest_findings(
                     report_document.get("recommendations"),
                     (bytes, str),
                 )
+                or not isinstance(report_document.get("trades"), Sequence)
+                or isinstance(
+                    report_document.get("trades"),
+                    (bytes, str),
+                )
             ):
                 findings.append(
                     _simple_finding("invalid_report_schema", relative_path)
@@ -736,7 +862,7 @@ def _export_manifest_findings(
                     _simple_finding("artifact_lineage_mismatch", relative_path)
                 )
             expected_formats = ["json"]
-            if has_csv_pair:
+            if has_csv_set:
                 expected_formats.append("csv")
             if "html" in artifact_names:
                 expected_formats.append("html")
@@ -783,13 +909,77 @@ def _export_manifest_findings(
                 != result.get("candidates", [])
                 or report_document.get("recommendations")
                 != result.get("recommendations", [])
+                or report_document.get("trades")
+                != result.get("trades", [])
             ):
                 findings.append(
                     _simple_finding("artifact_rows_mismatch", relative_path)
                 )
     if report_document is not None:
+        csv_bindings = {
+            "candidates.csv": (
+                report_document.get("candidates"),
+                CANDIDATE_FIELDS,
+            ),
+            "recommendations.csv": (
+                report_document.get("recommendations"),
+                RECOMMENDATION_FIELDS,
+            ),
+            "trades.csv": (
+                report_document.get("trades"),
+                TRADE_FIELDS,
+            ),
+        }
+        for relative_path, (raw_rows, empty_fields) in csv_bindings.items():
+            if relative_path not in artifact_contents:
+                continue
+            if (
+                not isinstance(raw_rows, Sequence)
+                or isinstance(raw_rows, (bytes, bytearray, str))
+                or any(not isinstance(row, Mapping) for row in raw_rows)
+            ):
+                findings.append(
+                    _simple_finding("artifact_rows_mismatch", relative_path)
+                )
+                continue
+            try:
+                expected_csv = canonical_csv_bytes(
+                    tuple(
+                        row
+                        for row in raw_rows
+                        if isinstance(row, Mapping)
+                    ),
+                    empty_fields=empty_fields,
+                )
+            except (TypeError, ValueError):
+                findings.append(
+                    _simple_finding("artifact_rows_mismatch", relative_path)
+                )
+                continue
+            if artifact_contents[relative_path] != expected_csv:
+                findings.append(
+                    _simple_finding("artifact_rows_mismatch", relative_path)
+                )
+        html_content = artifact_contents.get("report.html")
+        if html_content is not None:
+            findings.extend(
+                _html_binding_findings(
+                    html_content,
+                    report_document,
+                    "report.html",
+                )
+            )
         report_seed = dict(report_document)
         report_seed.pop("export_id", None)
+        if html_content is not None:
+            try:
+                expected_html = canonical_report_html(report_seed)
+            except (TypeError, ValueError):
+                expected_html = b""
+            if html_content != expected_html:
+                findings.append(
+                    _simple_finding("artifact_rows_mismatch", "report.html")
+                )
         try:
             canonical_report_seed = (
                 json.dumps(

@@ -4,6 +4,8 @@ import hashlib
 import time
 from pathlib import Path
 
+import drawdown_lab.reports.render as report_render
+import pytest
 from drawdown_lab.api.app import Settings, create_app
 from drawdown_lab.reports.privacy import privacy_scan
 from fastapi.testclient import TestClient
@@ -82,6 +84,66 @@ def test_post_report_export_accepts_only_result_id_and_formats(tmp_path: Path) -
         / "manifest.json"
     ).is_file()
     assert injected.status_code == 422
+
+
+def test_successful_export_persists_typed_content_and_retry_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    request = {
+        "schema_version": "1.0",
+        "result_id": RESULT_ID,
+        "formats": ["html", "json", "csv"],
+    }
+    with _client(tmp_path) as client:
+        first = client.post("/api/v1/reports/export", json=request)
+        report_after_first = client.get("/api/v1/reports").json()["reports"][0]
+        second = client.post("/api/v1/reports/export", json=request)
+        report_after_second = client.get(
+            f"/api/v1/reports/{report_after_first['id']}"
+        ).json()
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json() == first.json()
+    assert report_after_first == report_after_second
+    assert report_after_first["export_status"] == "exported"
+    assert report_after_first["content"] == {
+        "status": "exported",
+        "message": "Report export is ready.",
+        "result_id": RESULT_ID,
+        "export_id": first.json()["export_id"],
+        "artifacts": first.json()["artifacts"],
+        "lineage": first.json()["lineage"],
+        "optimization": report_after_first["content"]["optimization"],
+    }
+    assert report_after_first["content"]["optimization"]["schema_version"] == "1.0"
+
+
+def test_failed_export_does_not_claim_persisted_report_is_exported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+
+    def fail_render(*_: object, **__: object) -> object:
+        raise OSError("simulated render failure")
+
+    monkeypatch.setattr(report_render, "_render_report", fail_render)
+    with client:
+        with pytest.raises(OSError, match="simulated render failure"):
+            client.post(
+                "/api/v1/reports/export",
+                json={
+                    "schema_version": "1.0",
+                    "result_id": RESULT_ID,
+                    "formats": ["json"],
+                },
+            )
+        report = client.get("/api/v1/reports").json()["reports"][0]
+
+    assert report["export_status"] == "not_yet_exported"
+    assert report["content"]["status"] == "not_yet_exported"
+    assert "export_id" not in report["content"]
 
 
 def test_post_report_export_fails_closed_for_unknown_id_and_empty_formats(
