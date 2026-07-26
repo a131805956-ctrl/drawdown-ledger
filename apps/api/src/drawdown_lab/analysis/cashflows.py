@@ -23,6 +23,15 @@ class ContributionEvent:
     kind: ContributionEventKind
     amount: Money = Decimal("0")
 
+    def __post_init__(self) -> None:
+        if self.kind not in {"bonus", "override", "pause", "resume"}:
+            raise ValueError(f"Unknown contribution event kind: {self.kind}")
+        normalized_amount = as_decimal(self.amount)
+        if self.kind in {"pause", "resume"} and normalized_amount != 0:
+            raise ValueError(f"{self.kind} events cannot include an amount")
+        object.__setattr__(self, "month", self.month.replace(day=1))
+        object.__setattr__(self, "amount", quantize_money(normalized_amount))
+
 
 def _event_date(value: str | date) -> date:
     if isinstance(value, date):
@@ -64,6 +73,7 @@ class ContributionSchedule:
         if not 1 <= self.contribution_day <= 31:
             raise ValueError("Contribution day must be between 1 and 31")
         seen: set[tuple[date, str]] = set()
+        control_kinds: dict[date, set[str]] = {}
         for event in self.events:
             if event.amount < 0:
                 raise ValueError("Contribution event amounts must be non-negative")
@@ -71,6 +81,13 @@ class ContributionSchedule:
             if key in seen and event.kind != "bonus":
                 raise ValueError(f"Duplicate {event.kind} event for {event.month:%Y-%m}")
             seen.add(key)
+            if event.kind in {"pause", "resume"}:
+                kinds = control_kinds.setdefault(event.month, set())
+                kinds.add(event.kind)
+                if kinds == {"pause", "resume"}:
+                    raise ValueError(
+                        f"pause and resume events conflict for {event.month:%Y-%m}"
+                    )
 
     def amount_for(self, when: date, *, plan_start: date | None = None) -> Money:
         target = when.replace(day=1)
@@ -112,10 +129,9 @@ class ContributionSchedule:
             if due_date <= through:
                 monthly_dates.append(due_date)
             cursor = _next_month(cursor)
+        effective_month = effective_start.replace(day=1)
         event_dates = {
-            event.month
-            for event in self.events
-            if effective_start <= event.month <= through
+            event.month for event in self.events if effective_month <= event.month <= through
         }
         timeline = sorted(set(monthly_dates) | event_dates)
         due: list[CashFlow] = []
@@ -131,8 +147,7 @@ class ContributionSchedule:
 
             if current in monthly_dates and active:
                 amount = quantize_money(
-                    current_monthly
-                    * (Decimal("1") + self.annual_growth) ** (completed // 12)
+                    current_monthly * (Decimal("1") + self.annual_growth) ** (completed // 12)
                 )
                 if amount:
                     if current >= posting_start:

@@ -47,6 +47,19 @@ def test_daily_reset_synthetic_nav_compounds_leveraged_daily_returns() -> None:
     assert not hasattr(synthetic, "currency")
 
 
+def test_daily_reset_synthetic_nav_uses_price_returns_not_total_returns() -> None:
+    prototype = _frame([100, 90], start="2009-01-02")
+    prototype.data["adj_close"] = [100.0, 95.0]
+
+    synthetic = synthetic_daily_reset_nav(
+        prototype,
+        leverage=2.0,
+        initial_nav=100.0,
+    )
+
+    assert synthetic.nav.tolist() == pytest.approx([100.0, 80.0])
+
+
 def test_synthetic_observations_never_count_as_actual_etf_evidence() -> None:
     actual = _frame([40, 41], start="2010-02-11")
     synthetic = synthetic_daily_reset_nav(

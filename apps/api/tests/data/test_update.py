@@ -11,7 +11,7 @@ import pytest
 from drawdown_lab.data.catalog import DataCatalog
 from drawdown_lab.data.models import MarketFrame
 from drawdown_lab.data.update import DataUpdateError, UpdateCoordinator
-from drawdown_lab.domain.instruments import INSTRUMENT_FAMILIES
+from drawdown_lab.domain.instruments import required_market_symbols
 
 
 def market_frame_through(end: str, *, start: str = "2026-07-21") -> MarketFrame:
@@ -221,9 +221,10 @@ def test_blank_catalog_uses_all_approved_registry_symbols(tmp_path: Path) -> Non
 
     result = UpdateCoordinator(provider, DataCatalog(tmp_path)).ensure_current(date(2026, 8, 15))
 
-    approved = {item.symbol for family in INSTRUMENT_FAMILIES for item in family.instruments}
+    approved = set(required_market_symbols())
     assert result.request_count == len(approved)
     assert {symbol for symbol, _, _ in provider.calls} == approved
+    assert {"^TWII", "^NDX", "^GSPC", "^DJI", "^RUT"} <= approved
 
 
 def test_catalog_snapshot_binds_provider_fetch_time_cutoff_and_file_hash(

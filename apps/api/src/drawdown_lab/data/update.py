@@ -11,7 +11,7 @@ from drawdown_lab.data.catalog import DataCatalog
 from drawdown_lab.data.cutoff import policy_cutoff
 from drawdown_lab.data.models import MarketFrame, merge_market_frames, validate_market_frame
 from drawdown_lab.data.provider import MarketDataProvider
-from drawdown_lab.domain.instruments import INSTRUMENT_FAMILIES
+from drawdown_lab.domain.instruments import required_market_symbols
 
 
 class DataUpdateError(RuntimeError):
@@ -84,6 +84,4 @@ class UpdateCoordinator:
 
     @staticmethod
     def _approved_symbols() -> tuple[str, ...]:
-        return tuple(
-            instrument.symbol for family in INSTRUMENT_FAMILIES for instrument in family.instruments
-        )
+        return required_market_symbols()

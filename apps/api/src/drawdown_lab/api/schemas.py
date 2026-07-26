@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import datetime as dt
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    ValidationError,
+    model_validator,
+)
 
+from drawdown_lab.analysis.cashflows import ContributionEvent
 from drawdown_lab.analysis.evidence import EvidenceRequest
 from drawdown_lab.analysis.strategy import StrategyConfig, ThresholdTier
+from drawdown_lab.domain.money import MAX_SAFE_DECIMAL
 from drawdown_lab.optimization.evaluator import (
     HistoricalOptimizationRequest,
     RatioSearch,
@@ -24,8 +34,20 @@ from drawdown_lab.storage.jobs import JobRecord, ReportRecord, ResultRecord
 
 SCHEMA_VERSION: Literal["1.0"] = "1.0"
 PositiveRatio = Annotated[Decimal, Field(gt=0, le=1)]
-NonNegativeDecimal = Annotated[Decimal, Field(ge=0)]
+NonNegativeDecimal = Annotated[Decimal, Field(ge=0, le=MAX_SAFE_DECIMAL)]
+ContributionGrowth = Annotated[Decimal, Field(gt=-1, le=MAX_SAFE_DECIMAL)]
 UnitDecimal = Annotated[Decimal, Field(ge=0, le=1)]
+HorizonSessions = Annotated[int, Field(gt=0, le=2520)]
+ZeroDecimal = Annotated[Decimal, Field(ge=0, le=0)]
+CanonicalMonth = Annotated[
+    date,
+    Field(
+        description=(
+            "Calendar-month event. Any valid date is normalized to the first day "
+            "of that month."
+        )
+    ),
+]
 
 
 class ApiModel(BaseModel):
@@ -53,6 +75,7 @@ class InstrumentListResponse(VersionedModel):
 
 class DataCoverageResponse(ApiModel):
     symbol: str
+    roles: tuple[Literal["tradable", "prototype", "prototype_proxy"], ...]
     cached: bool
     actual_last_session: date | None
     policy_cutoff: date | None
@@ -81,11 +104,49 @@ class MarketOverviewResponse(VersionedModel):
     formal_result_count: int
 
 
+class ChartPointResponse(ApiModel):
+    session: date
+    open: float | None
+    high: float | None
+    low: float | None
+    close: float
+    total_return_close: float
+    normalized_total_return: float
+    drawdown: float
+
+
+class ChartSeriesResponse(ApiModel):
+    symbol: str
+    source_kind: Literal["actual", "synthetic"]
+    unit: Literal["price", "index"]
+    leverage: float
+    currency: str | None
+    actual_last_session: date | None
+    policy_cutoff: date | None
+    points: tuple[ChartPointResponse, ...]
+
+
+class MarketSeriesResponse(VersionedModel):
+    family_id: str
+    prototype_symbol: str
+    prototype_source: Literal["benchmark", "proxy"]
+    target_symbol: str
+    source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
+    handoff_session: date | None
+    prototype: ChartSeriesResponse
+    actual: ChartSeriesResponse
+    synthetic: ChartSeriesResponse | None
+
+
 class EvidenceAnalyzeRequest(VersionedModel):
     family_id: str = Field(min_length=1)
     target_symbol: str = Field(min_length=1)
     threshold: float = Field(gt=0.0, le=1.0)
-    horizons: tuple[int, ...] = (21, 63, 126, 252, 756, 1260)
+    horizons: tuple[HorizonSessions, ...] = Field(
+        default=(21, 63, 126, 252, 756, 1260),
+        min_length=1,
+        max_length=16,
+    )
 
     @model_validator(mode="after")
     def validate_horizons(self) -> Self:
@@ -113,17 +174,118 @@ class HorizonStatisticsResponse(ApiModel):
     confidence_upper: float | None
 
 
+class ForwardReturnResponse(ApiModel):
+    horizon_sessions: int
+    exit_date: date | None
+    total_return: float | None
+
+
+class EpisodeTraceResponse(ApiModel):
+    threshold: float
+    cycle_id: int
+    peak_date: date
+    peak_price: float
+    signal_date: date
+    signal_price: float
+    signal_drawdown: float
+    entry_date: date | None
+    entry_price: Decimal | None
+    recovery_date: date | None
+    recovery_sessions: int | None
+    v_recovered: bool
+    mae: float | None
+    mfe: float | None
+    forward_returns: tuple[ForwardReturnResponse, ...]
+
+
 class EvidenceAnalyzeResponse(VersionedModel):
+    family_id: str
+    prototype_symbol: str
+    prototype_source: Literal["benchmark", "proxy"]
+    target_symbol: str
+    source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
+    source_kind: Literal["actual"] = "actual"
+    prototype_actual_last_session: date | None
+    prototype_policy_cutoff: date | None
+    target_actual_last_session: date | None
+    target_policy_cutoff: date | None
     n_day: int
     n_episode: int
     n_executed_episode: int
     daily_statistics: tuple[HorizonStatisticsResponse, ...]
     episode_statistics: tuple[HorizonStatisticsResponse, ...]
+    episodes: tuple[EpisodeTraceResponse, ...]
 
 
 class StrategyTierInput(ApiModel):
     depth: PositiveRatio
     cash_fraction: PositiveRatio
+
+
+class BonusContributionEventInput(ApiModel):
+    month: CanonicalMonth
+    kind: Literal["bonus"]
+    amount: NonNegativeDecimal
+
+    def to_domain(self) -> ContributionEvent:
+        return ContributionEvent(
+            month=self.month,
+            kind=self.kind,
+            amount=self.amount,
+        )
+
+
+class OverrideContributionEventInput(ApiModel):
+    month: CanonicalMonth
+    kind: Literal["override"]
+    amount: NonNegativeDecimal
+
+    def to_domain(self) -> ContributionEvent:
+        return ContributionEvent(
+            month=self.month,
+            kind=self.kind,
+            amount=self.amount,
+        )
+
+
+class PauseContributionEventInput(ApiModel):
+    month: CanonicalMonth
+    kind: Literal["pause"]
+    amount: ZeroDecimal = Decimal("0")
+
+    def to_domain(self) -> ContributionEvent:
+        return ContributionEvent(
+            month=self.month,
+            kind=self.kind,
+            amount=self.amount,
+        )
+
+
+class ResumeContributionEventInput(ApiModel):
+    month: CanonicalMonth
+    kind: Literal["resume"]
+    amount: ZeroDecimal = Decimal("0")
+
+    def to_domain(self) -> ContributionEvent:
+        return ContributionEvent(
+            month=self.month,
+            kind=self.kind,
+            amount=self.amount,
+        )
+
+
+ContributionEventVariant = Annotated[
+    BonusContributionEventInput
+    | OverrideContributionEventInput
+    | PauseContributionEventInput
+    | ResumeContributionEventInput,
+    Field(discriminator="kind"),
+]
+
+
+class ContributionEventInput(RootModel[ContributionEventVariant]):
+    def to_domain(self) -> ContributionEvent:
+        return self.root.to_domain()
 
 
 class StrategyBacktestRequest(VersionedModel):
@@ -135,8 +297,9 @@ class StrategyBacktestRequest(VersionedModel):
     initial_shares: NonNegativeDecimal = Decimal("0")
     tiers: tuple[StrategyTierInput, ...] = Field(min_length=1)
     monthly_contribution: NonNegativeDecimal = Decimal("0")
-    annual_contribution_growth: Decimal = Field(default=Decimal("0"), gt=-1)
+    annual_contribution_growth: ContributionGrowth = Decimal("0")
     contribution_day: int = Field(default=1, ge=1, le=31)
+    contribution_events: tuple[ContributionEventInput, ...] = ()
     cash_interest_rate: NonNegativeDecimal = Decimal("0")
     dividend_policy: Literal["cash", "reinvest"] = "cash"
     fixed_fee: NonNegativeDecimal = Decimal("0")
@@ -161,9 +324,10 @@ class StrategyBacktestRequest(VersionedModel):
                 monthly=self.monthly_contribution,
                 annual_growth=self.annual_contribution_growth,
                 start=self.start,
+                events=tuple(event.to_domain() for event in self.contribution_events),
                 contribution_day=self.contribution_day,
             )
-            if self.monthly_contribution > 0
+            if self.monthly_contribution > 0 or self.contribution_events
             else None
         )
         return StrategyConfig(
@@ -171,9 +335,7 @@ class StrategyBacktestRequest(VersionedModel):
             end=self.end,
             initial_cash=self.initial_cash,
             initial_shares=self.initial_shares,
-            tiers=tuple(
-                ThresholdTier(tier.depth, tier.cash_fraction) for tier in self.tiers
-            ),
+            tiers=tuple(ThresholdTier(tier.depth, tier.cash_fraction) for tier in self.tiers),
             contributions=contributions,
             cash_interest_rate=self.cash_interest_rate,
             dividend_policy=self.dividend_policy,
@@ -194,13 +356,56 @@ class PerformanceResponse(ApiModel):
     deepest_tier_missed: Decimal | None
 
 
+class TradeResponse(ApiModel):
+    date: dt.date
+    signal_date: dt.date
+    threshold: Decimal | None
+    cash_spent: Decimal
+    shares_bought: Decimal
+    raw_price: Decimal
+    execution_price: Decimal
+    fee: Decimal
+    prototype_drawdown: Decimal | None
+    target_drawdown: Decimal | None
+    post_trade_cash: Decimal
+    marker_profit_loss: Decimal
+    kind: Literal["buy", "reinvest", "dca", "buy-and-hold"]
+
+
+class PortfolioPointResponse(ApiModel):
+    date: date
+    cash: Decimal
+    shares: Decimal
+    close: Decimal
+    value: Decimal
+    external_flow: Decimal
+    net_contributions: Decimal
+    profit_loss: Decimal
+
+
 class StrategyBacktestResponse(VersionedModel):
+    family_id: str
+    prototype_symbol: str
+    prototype_source: Literal["benchmark", "proxy"]
+    target_symbol: str
+    source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
+    source_kind: Literal["actual"] = "actual"
+    prototype_actual_last_session: date | None
+    prototype_policy_cutoff: date | None
+    target_actual_last_session: date | None
+    target_policy_cutoff: date | None
     name: str
     ending_cash: Decimal
     ending_shares: Decimal
     trade_count: int
+    dividend_income: Decimal
+    contribution_total: Decimal
+    interest_income: Decimal
+    total_fees: Decimal
     pending_thresholds: tuple[Decimal, ...]
     missed_thresholds: tuple[Decimal, ...]
+    trades: tuple[TradeResponse, ...]
+    equity_curve: tuple[PortfolioPointResponse, ...]
     metrics: PerformanceResponse | None
 
 
@@ -223,8 +428,9 @@ class StrategyTemplateInput(ApiModel):
     initial_cash: NonNegativeDecimal
     initial_shares: NonNegativeDecimal = Decimal("0")
     monthly_contribution: NonNegativeDecimal = Decimal("0")
-    annual_contribution_growth: Decimal = Field(default=Decimal("0"), gt=-1)
+    annual_contribution_growth: ContributionGrowth = Decimal("0")
     contribution_day: int = Field(default=1, ge=1, le=31)
+    contribution_events: tuple[ContributionEventInput, ...] = ()
     cash_interest_rate: NonNegativeDecimal = Decimal("0")
     dividend_policy: Literal["cash", "reinvest"] = "cash"
     fixed_fee: NonNegativeDecimal = Decimal("0")
@@ -246,6 +452,7 @@ class StrategyTemplateInput(ApiModel):
             monthly_contribution=self.monthly_contribution,
             annual_contribution_growth=self.annual_contribution_growth,
             contribution_day=self.contribution_day,
+            contribution_events=tuple(event.to_domain() for event in self.contribution_events),
             cash_interest_rate=self.cash_interest_rate,
             dividend_policy=self.dividend_policy,
             fixed_fee=self.fixed_fee,
@@ -264,9 +471,7 @@ class RatioSearchInput(ApiModel):
     def validate_range(self) -> Self:
         if self.maximum_basis_points < self.minimum_basis_points:
             raise ValueError("Maximum ratio must not be less than minimum ratio")
-        if (
-            self.maximum_basis_points - self.minimum_basis_points
-        ) % self.step_basis_points:
+        if (self.maximum_basis_points - self.minimum_basis_points) % self.step_basis_points:
             raise ValueError("Ratio range must be divisible by step")
         return self
 
@@ -291,9 +496,7 @@ class WalkForwardInput(ApiModel):
             n_splits=self.n_splits,
             minimum_train_sessions=self.minimum_train_sessions,
             test_size_sessions=self.test_size_sessions,
-            minimum_train_independent_episodes=(
-                self.minimum_train_independent_episodes
-            ),
+            minimum_train_independent_episodes=(self.minimum_train_independent_episodes),
             minimum_test_independent_episodes=self.minimum_test_independent_episodes,
         )
 
