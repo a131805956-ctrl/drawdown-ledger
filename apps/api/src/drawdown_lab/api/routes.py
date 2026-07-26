@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import cast
+from typing import Literal, cast
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, status
@@ -51,8 +51,11 @@ from drawdown_lab.data.models import MarketFrame
 from drawdown_lab.data.update import UpdateCoordinator
 from drawdown_lab.domain.instruments import (
     INSTRUMENT_FAMILIES,
+    Instrument,
     InstrumentFamilyMismatchError,
     InstrumentFamilyNotFoundError,
+    market_symbol_roles,
+    prototype_proxy_symbol,
     resolve_family_instrument,
 )
 from drawdown_lab.storage.jobs import (
@@ -64,6 +67,15 @@ from drawdown_lab.storage.jobs import (
 
 MAX_MARKET_SERIES_RANGE_DAYS = 366 * 50
 MAX_MARKET_SERIES_POINTS = 15_000
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedMarketFrames:
+    target: Instrument
+    prototype_symbol: str
+    prototype_source: Literal["benchmark", "proxy"]
+    prototype: MarketFrame
+    traded: MarketFrame
 
 
 def create_router(
@@ -85,26 +97,45 @@ def create_router(
     def trusted_frames(
         family_id: str,
         target_symbol: str,
-    ) -> tuple[MarketFrame, MarketFrame]:
+    ) -> TrustedMarketFrames:
         try:
-            _, target = resolve_family_instrument(family_id, target_symbol)
+            family, target = resolve_family_instrument(family_id, target_symbol)
         except InstrumentFamilyNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InstrumentFamilyMismatchError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        prototype = data_catalog.read(target.prototype_symbol)
+        prototype_symbol = family.benchmark_symbol
+        prototype_source: Literal["benchmark", "proxy"] = "benchmark"
+        prototype = data_catalog.read(prototype_symbol)
+        proxy_symbol = prototype_proxy_symbol(family)
+        if prototype is None and proxy_symbol != prototype_symbol:
+            prototype_symbol = proxy_symbol
+            prototype_source = "proxy"
+            prototype = data_catalog.read(prototype_symbol)
         traded = data_catalog.read(target.symbol)
         if prototype is None:
+            candidates = tuple(
+                dict.fromkeys((family.benchmark_symbol, proxy_symbol))
+            )
             raise HTTPException(
                 status_code=404,
-                detail=f"Trusted cache is missing {target.prototype_symbol}",
+                detail=(
+                    "Trusted cache is missing prototype series: "
+                    f"{', '.join(candidates)}"
+                ),
             )
         if traded is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Trusted cache is missing {target.symbol}",
             )
-        return prototype, traded
+        return TrustedMarketFrames(
+            target=target,
+            prototype_symbol=prototype_symbol,
+            prototype_source=prototype_source,
+            prototype=prototype,
+            traded=traded,
+        )
 
     @router.get("/instruments", response_model=InstrumentListResponse)
     def instruments() -> InstrumentListResponse:
@@ -117,19 +148,18 @@ def create_router(
 
     @router.get("/data/health", response_model=DataHealthResponse)
     def data_health() -> DataHealthResponse:
-        symbols = tuple(
-            instrument.symbol for family in INSTRUMENT_FAMILIES for instrument in family.instruments
-        )
+        symbols = market_symbol_roles()
         return DataHealthResponse(
             status="healthy",
             coverage=tuple(
                 DataCoverageResponse(
                     symbol=symbol,
+                    roles=roles,
                     cached=data_catalog.read(symbol) is not None,
                     actual_last_session=data_catalog.actual_last_session(symbol),
                     policy_cutoff=data_catalog.policy_cutoff(symbol),
                 )
-                for symbol in symbols
+                for symbol, roles in symbols.items()
             ),
         )
 
@@ -153,25 +183,33 @@ def create_router(
 
     @router.post("/evidence/analyze", response_model=EvidenceAnalyzeResponse)
     def evidence_analyze(request: EvidenceAnalyzeRequest) -> EvidenceAnalyzeResponse:
-        prototype, traded = trusted_frames(request.family_id, request.target_symbol)
-        _, target = resolve_family_instrument(request.family_id, request.target_symbol)
+        trusted = trusted_frames(request.family_id, request.target_symbol)
+        target = trusted.target
         try:
-            report = analyze_evidence(request.to_domain(), prototype, traded)
+            report = analyze_evidence(
+                request.to_domain(),
+                trusted.prototype,
+                trusted.traded,
+            )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         classified = {
             (episode.threshold, episode.cycle_id, episode.signal_date): episode
-            for episode in classify_episodes(prototype, (request.threshold,))
+            for episode in classify_episodes(
+                trusted.prototype,
+                (request.threshold,),
+            )
         }
         return EvidenceAnalyzeResponse(
             family_id=request.family_id,
-            prototype_symbol=target.prototype_symbol,
+            prototype_symbol=trusted.prototype_symbol,
+            prototype_source=trusted.prototype_source,
             target_symbol=target.symbol,
             prototype_actual_last_session=data_catalog.actual_last_session(
-                target.prototype_symbol
+                trusted.prototype_symbol
             ),
             prototype_policy_cutoff=data_catalog.policy_cutoff(
-                target.prototype_symbol
+                trusted.prototype_symbol
             ),
             target_actual_last_session=data_catalog.actual_last_session(target.symbol),
             target_policy_cutoff=data_catalog.policy_cutoff(target.symbol),
@@ -218,10 +256,14 @@ def create_router(
 
     @router.post("/strategies/backtest", response_model=StrategyBacktestResponse)
     def strategy_backtest(request: StrategyBacktestRequest) -> StrategyBacktestResponse:
-        prototype, traded = trusted_frames(request.family_id, request.target_symbol)
-        _, target = resolve_family_instrument(request.family_id, request.target_symbol)
+        trusted = trusted_frames(request.family_id, request.target_symbol)
+        target = trusted.target
         try:
-            result = simulate_strategy(request.to_domain(), prototype, traded)
+            result = simulate_strategy(
+                request.to_domain(),
+                trusted.prototype,
+                trusted.traded,
+            )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         metrics = (
@@ -229,13 +271,14 @@ def create_router(
         )
         return StrategyBacktestResponse(
             family_id=request.family_id,
-            prototype_symbol=target.prototype_symbol,
+            prototype_symbol=trusted.prototype_symbol,
+            prototype_source=trusted.prototype_source,
             target_symbol=target.symbol,
             prototype_actual_last_session=data_catalog.actual_last_session(
-                target.prototype_symbol
+                trusted.prototype_symbol
             ),
             prototype_policy_cutoff=data_catalog.policy_cutoff(
-                target.prototype_symbol
+                trusted.prototype_symbol
             ),
             target_actual_last_session=data_catalog.actual_last_session(target.symbol),
             target_policy_cutoff=data_catalog.policy_cutoff(target.symbol),
@@ -263,7 +306,7 @@ def create_router(
         request: OptimizationCreateRequest,
     ) -> OptimizationAcceptedResponse:
         try:
-            _, target = resolve_family_instrument(
+            family, target = resolve_family_instrument(
                 request.family_id,
                 request.target_symbol,
             )
@@ -271,9 +314,14 @@ def create_router(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InstrumentFamilyMismatchError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        prototype_symbol = (
+            family.benchmark_symbol
+            if data_catalog.read(family.benchmark_symbol) is not None
+            else prototype_proxy_symbol(family)
+        )
         try:
             domain_request = request.to_domain(
-                prototype_symbol=target.prototype_symbol,
+                prototype_symbol=prototype_symbol,
                 target_leverage=target.leverage,
             )
         except ValueError as error:
@@ -283,7 +331,12 @@ def create_router(
                 reason=str(error),
             )
             raise HTTPException(status_code=422, detail=str(error)) from error
-        trusted_frames(request.family_id, request.target_symbol)
+        trusted = trusted_frames(request.family_id, request.target_symbol)
+        if trusted.prototype_symbol != domain_request.prototype_symbol:
+            domain_request = replace(
+                domain_request,
+                prototype_symbol=trusted.prototype_symbol,
+            )
         job = job_service.submit(domain_request)
         return OptimizationAcceptedResponse(job_id=job.id, status="queued")
 
@@ -344,17 +397,28 @@ def create_router(
                     f"{MAX_MARKET_SERIES_RANGE_DAYS} days"
                 ),
             )
-        prototype, traded = trusted_frames(family_id, target_symbol)
-        _, target = resolve_family_instrument(family_id, target_symbol)
-        handoff_session = cast(pd.Timestamp, traded.data.index[0]).date()
-        prototype_series = actual_chart_series(prototype, start=start, end=end)
-        actual_series = actual_chart_series(traded, start=start, end=end)
+        trusted = trusted_frames(family_id, target_symbol)
+        target = trusted.target
+        handoff_session = cast(
+            pd.Timestamp,
+            trusted.traded.data.index[0],
+        ).date()
+        prototype_series = actual_chart_series(
+            trusted.prototype,
+            start=start,
+            end=end,
+        )
+        actual_series = actual_chart_series(
+            trusted.traded,
+            start=start,
+            end=end,
+        )
         synthetic_end = handoff_session - timedelta(days=1)
         if end is not None:
             synthetic_end = min(synthetic_end, end)
         stress_series = (
             synthetic_chart_series(
-                prototype,
+                trusted.prototype,
                 float(target.leverage),
                 annual_expense_ratio=annual_expense_ratio,
                 start=start,
@@ -378,11 +442,12 @@ def create_router(
             )
         return MarketSeriesResponse(
             family_id=family_id,
-            prototype_symbol=target.prototype_symbol,
+            prototype_symbol=trusted.prototype_symbol,
+            prototype_source=trusted.prototype_source,
             target_symbol=target.symbol,
             handoff_session=handoff_session if target.leverage > 1 else None,
             prototype=_chart_response(
-                symbol=target.prototype_symbol,
+                symbol=trusted.prototype_symbol,
                 leverage=1.0,
                 currency=target.currency,
                 series=prototype_series,
@@ -402,7 +467,7 @@ def create_router(
                     currency=None,
                     series=stress_series,
                     catalog=data_catalog,
-                    lineage_symbol=target.prototype_symbol,
+                    lineage_symbol=trusted.prototype_symbol,
                 )
                 if stress_series is not None
                 else None

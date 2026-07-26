@@ -122,6 +122,28 @@ def test_optimizer_uses_trusted_cached_symbols_and_internal_simulations(
     ) == [10000]
 
 
+def test_optimizer_provenance_prefers_cached_primary_index(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    _seed(data_root)
+    DataCatalog(data_root).store("^NDX", _frame(PROTOTYPE_PRICES))
+    with TestClient(
+        create_app(
+            Settings(
+                database_path=tmp_path / "drawdown.sqlite",
+                data_root=data_root,
+                job_batch_size=1,
+            )
+        )
+    ) as client:
+        accepted = client.post("/api/v1/optimizations", json=_request())
+        assert accepted.status_code == 202
+        job = _wait(client, accepted.json()["job_id"])
+        result = client.get(f"/api/v1/results/{job['result_id']}").json()
+
+    assert job["status"] == "succeeded"
+    assert result["payload"]["provenance"]["prototype_symbol"] == "^NDX"
+
+
 def test_optimizer_rejects_fabricated_candidate_scores_and_counts(tmp_path: Path) -> None:
     data_root = tmp_path / "data"
     _seed(data_root)

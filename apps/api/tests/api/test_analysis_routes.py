@@ -3,10 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from drawdown_lab.api.app import Settings, create_app
+from drawdown_lab.data.catalog import DataCatalog
 from fastapi.testclient import TestClient
 
+from apps.api.tests.api.test_trusted_optimizer import _frame, _seed
 from apps.api.tests.api.test_trusted_optimizer import _request as optimization_request
-from apps.api.tests.api.test_trusted_optimizer import _seed
+from apps.api.tests.optimization.test_evaluator import PROTOTYPE_PRICES, RISING_TARGET
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -46,10 +48,65 @@ def test_cached_symbols_drive_evidence_and_strategy_routes(tmp_path: Path) -> No
 
     assert evidence.status_code == 200
     assert evidence.json()["n_episode"] == 2
+    assert evidence.json()["prototype_symbol"] == "QQQ"
+    assert evidence.json()["prototype_source"] == "proxy"
     assert evidence.json()["n_executed_episode"] == 2
     assert strategy.status_code == 200
     assert strategy.json()["trade_count"] == 2
     assert strategy.json()["schema_version"] == "1.0"
+    assert strategy.json()["prototype_symbol"] == "QQQ"
+    assert strategy.json()["prototype_source"] == "proxy"
+
+
+def test_primary_index_precedes_available_etf_proxy(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    assert settings.data_root is not None
+    catalog = DataCatalog(settings.data_root)
+    catalog.store("^NDX", _frame(PROTOTYPE_PRICES))
+    catalog.store("QQQ", _frame(tuple(range(100, 124))))
+    catalog.store("TQQQ", _frame(RISING_TARGET))
+
+    with TestClient(create_app(settings)) as client:
+        evidence = client.post(
+            "/api/v1/evidence/analyze",
+            json={
+                "schema_version": "1.0",
+                "family_id": "nasdaq-100",
+                "target_symbol": "TQQQ",
+                "threshold": 0.20,
+                "horizons": [1],
+            },
+        )
+
+    assert evidence.status_code == 200
+    assert evidence.json()["n_episode"] == 2
+    assert evidence.json()["prototype_symbol"] == "^NDX"
+    assert evidence.json()["prototype_source"] == "benchmark"
+
+
+def test_taiwan_weighted_routes_use_hidden_twii_prototype(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    assert settings.data_root is not None
+    catalog = DataCatalog(settings.data_root)
+    catalog.store("^TWII", _frame(PROTOTYPE_PRICES))
+    catalog.store("00685L.TW", _frame(RISING_TARGET))
+
+    with TestClient(create_app(settings)) as client:
+        evidence = client.post(
+            "/api/v1/evidence/analyze",
+            json={
+                "schema_version": "1.0",
+                "family_id": "taiwan-weighted",
+                "target_symbol": "00685L.TW",
+                "threshold": 0.20,
+                "horizons": [1],
+            },
+        )
+
+    assert evidence.status_code == 200
+    assert evidence.json()["n_episode"] == 2
+    assert evidence.json()["prototype_symbol"] == "^TWII"
+    assert evidence.json()["prototype_source"] == "benchmark"
 
 
 def test_formal_routes_reject_caller_supplied_market_frames(tmp_path: Path) -> None:
