@@ -5,10 +5,19 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    ValidationError,
+    model_validator,
+)
 
+from drawdown_lab.analysis.cashflows import ContributionEvent
 from drawdown_lab.analysis.evidence import EvidenceRequest
 from drawdown_lab.analysis.strategy import StrategyConfig, ThresholdTier
+from drawdown_lab.domain.money import MAX_SAFE_DECIMAL
 from drawdown_lab.optimization.evaluator import (
     HistoricalOptimizationRequest,
     RatioSearch,
@@ -24,9 +33,20 @@ from drawdown_lab.storage.jobs import JobRecord, ReportRecord, ResultRecord
 
 SCHEMA_VERSION: Literal["1.0"] = "1.0"
 PositiveRatio = Annotated[Decimal, Field(gt=0, le=1)]
-NonNegativeDecimal = Annotated[Decimal, Field(ge=0)]
+NonNegativeDecimal = Annotated[Decimal, Field(ge=0, le=MAX_SAFE_DECIMAL)]
+ContributionGrowth = Annotated[Decimal, Field(gt=-1, le=MAX_SAFE_DECIMAL)]
 UnitDecimal = Annotated[Decimal, Field(ge=0, le=1)]
 HorizonSessions = Annotated[int, Field(gt=0, le=2520)]
+ZeroDecimal = Annotated[Decimal, Field(ge=0, le=0)]
+CanonicalMonth = Annotated[
+    date,
+    Field(
+        description=(
+            "Calendar-month event. Any valid date is normalized to the first day "
+            "of that month."
+        )
+    ),
+]
 
 
 class ApiModel(BaseModel):
@@ -201,6 +221,72 @@ class StrategyTierInput(ApiModel):
     cash_fraction: PositiveRatio
 
 
+class BonusContributionEventInput(ApiModel):
+    month: CanonicalMonth
+    kind: Literal["bonus"]
+    amount: NonNegativeDecimal
+
+    def to_domain(self) -> ContributionEvent:
+        return ContributionEvent(
+            month=self.month,
+            kind=self.kind,
+            amount=self.amount,
+        )
+
+
+class OverrideContributionEventInput(ApiModel):
+    month: CanonicalMonth
+    kind: Literal["override"]
+    amount: NonNegativeDecimal
+
+    def to_domain(self) -> ContributionEvent:
+        return ContributionEvent(
+            month=self.month,
+            kind=self.kind,
+            amount=self.amount,
+        )
+
+
+class PauseContributionEventInput(ApiModel):
+    month: CanonicalMonth
+    kind: Literal["pause"]
+    amount: ZeroDecimal = Decimal("0")
+
+    def to_domain(self) -> ContributionEvent:
+        return ContributionEvent(
+            month=self.month,
+            kind=self.kind,
+            amount=self.amount,
+        )
+
+
+class ResumeContributionEventInput(ApiModel):
+    month: CanonicalMonth
+    kind: Literal["resume"]
+    amount: ZeroDecimal = Decimal("0")
+
+    def to_domain(self) -> ContributionEvent:
+        return ContributionEvent(
+            month=self.month,
+            kind=self.kind,
+            amount=self.amount,
+        )
+
+
+ContributionEventVariant = Annotated[
+    BonusContributionEventInput
+    | OverrideContributionEventInput
+    | PauseContributionEventInput
+    | ResumeContributionEventInput,
+    Field(discriminator="kind"),
+]
+
+
+class ContributionEventInput(RootModel[ContributionEventVariant]):
+    def to_domain(self) -> ContributionEvent:
+        return self.root.to_domain()
+
+
 class StrategyBacktestRequest(VersionedModel):
     family_id: str = Field(min_length=1)
     target_symbol: str = Field(min_length=1)
@@ -210,8 +296,9 @@ class StrategyBacktestRequest(VersionedModel):
     initial_shares: NonNegativeDecimal = Decimal("0")
     tiers: tuple[StrategyTierInput, ...] = Field(min_length=1)
     monthly_contribution: NonNegativeDecimal = Decimal("0")
-    annual_contribution_growth: Decimal = Field(default=Decimal("0"), gt=-1)
+    annual_contribution_growth: ContributionGrowth = Decimal("0")
     contribution_day: int = Field(default=1, ge=1, le=31)
+    contribution_events: tuple[ContributionEventInput, ...] = ()
     cash_interest_rate: NonNegativeDecimal = Decimal("0")
     dividend_policy: Literal["cash", "reinvest"] = "cash"
     fixed_fee: NonNegativeDecimal = Decimal("0")
@@ -236,9 +323,10 @@ class StrategyBacktestRequest(VersionedModel):
                 monthly=self.monthly_contribution,
                 annual_growth=self.annual_contribution_growth,
                 start=self.start,
+                events=tuple(event.to_domain() for event in self.contribution_events),
                 contribution_day=self.contribution_day,
             )
-            if self.monthly_contribution > 0
+            if self.monthly_contribution > 0 or self.contribution_events
             else None
         )
         return StrategyConfig(
@@ -339,8 +427,9 @@ class StrategyTemplateInput(ApiModel):
     initial_cash: NonNegativeDecimal
     initial_shares: NonNegativeDecimal = Decimal("0")
     monthly_contribution: NonNegativeDecimal = Decimal("0")
-    annual_contribution_growth: Decimal = Field(default=Decimal("0"), gt=-1)
+    annual_contribution_growth: ContributionGrowth = Decimal("0")
     contribution_day: int = Field(default=1, ge=1, le=31)
+    contribution_events: tuple[ContributionEventInput, ...] = ()
     cash_interest_rate: NonNegativeDecimal = Decimal("0")
     dividend_policy: Literal["cash", "reinvest"] = "cash"
     fixed_fee: NonNegativeDecimal = Decimal("0")
@@ -362,6 +451,7 @@ class StrategyTemplateInput(ApiModel):
             monthly_contribution=self.monthly_contribution,
             annual_contribution_growth=self.annual_contribution_growth,
             contribution_day=self.contribution_day,
+            contribution_events=tuple(event.to_domain() for event in self.contribution_events),
             cash_interest_rate=self.cash_interest_rate,
             dividend_policy=self.dividend_policy,
             fixed_fee=self.fixed_fee,
