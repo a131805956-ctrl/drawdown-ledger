@@ -22,6 +22,8 @@ import type {
     MarketOverviewResponse,
     OptimizationAcceptedResponse,
     OptimizationCreateRequest,
+    ReportExportRequest,
+    ReportExportResponse,
     ReportListResponse,
     ReportResponse,
     ResultListResponse,
@@ -56,6 +58,10 @@ export interface ResearchApi {
     cancelJob(this: void, jobId: string): Promise<JobResponse>;
     listResults(this: void): Promise<ResultListResponse>;
     getResult(this: void, resultId: string): Promise<ResultResponse>;
+    exportReport(
+        this: void,
+        request: ReportExportRequest,
+    ): Promise<ReportExportResponse>;
     listReports(this: void): Promise<ReportListResponse>;
     getReport(this: void, reportId: string): Promise<ReportResponse>;
 }
@@ -219,6 +225,12 @@ export function createLiveResearchApi(
                 fetcher,
                 `${baseUrl}/results/${encodeURIComponent(resultId)}`,
             ),
+        exportReport: (request) =>
+            jsonRequest<ReportExportResponse>(
+                fetcher,
+                `${baseUrl}/reports/export`,
+                request,
+            ),
         listReports: () =>
             requestJson<ReportListResponse>(fetcher, `${baseUrl}/reports`),
         getReport: (reportId) =>
@@ -308,6 +320,8 @@ export function createStaticResearchApi(
                 },
             ),
         getResult: () => unavailableInStaticMode("Result detail"),
+        exportReport: () =>
+            unavailableInStaticMode("Report export"),
         listReports: () =>
             Promise.resolve(
                 snapshot.reports ?? {

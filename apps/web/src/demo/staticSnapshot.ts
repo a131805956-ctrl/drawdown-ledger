@@ -447,7 +447,7 @@ export const staticResearchSnapshot: StaticResearchSnapshot = {
                 result_id: "illustrative-result-2026-07-31",
                 title: "固定示例｜TQQQ 30% 原型回撤研究",
                 created_at: "2026-07-31T00:00:00Z",
-                export_status: "exported",
+                export_status: "not_yet_exported",
                 content: {
                     status: "not_yet_exported",
                     message:

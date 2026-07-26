@@ -7,6 +7,19 @@ import { createStaticResearchApi } from "../src/lib/api";
 import { MemoryRouter } from "../src/lib/router";
 
 describe("published illustrative snapshot", () => {
+    it("never labels a not-yet-exported illustrative report as exported", () => {
+        for (const report of staticResearchSnapshot.reports?.reports ?? []) {
+            if (
+                "status" in report.content &&
+                report.content.status === "not_yet_exported"
+            ) {
+                expect(report.export_status).toBe(
+                    "not_yet_exported",
+                );
+            }
+        }
+    });
+
     it("keeps pre-inception TQQQ history out of top-level actual evidence", () => {
         const evidence = staticResearchSnapshot.evidence;
         expect(evidence).toBeDefined();

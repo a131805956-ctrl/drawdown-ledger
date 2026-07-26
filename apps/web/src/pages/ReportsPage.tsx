@@ -1,12 +1,24 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useState, type FormEvent } from "react";
 
 import { RouteState } from "../components/RouteState";
 import { useResearchData } from "../lib/api";
 import type {
+    ReportExportRequest,
+    ReportExportResponse,
     ReportResponse,
     ResultResponse,
 } from "../lib/contracts";
+
+type ReportFormat = NonNullable<
+    ReportExportRequest["formats"]
+>[number];
+
+const reportFormats: readonly ReportFormat[] = [
+    "html",
+    "json",
+    "csv",
+];
 
 function isOptimizationResult(
     result: ResultResponse,
@@ -43,6 +55,22 @@ function localDate(value: string): string {
           }).format(parsed);
 }
 
+function exportedContentSummary(report: ReportResponse): string {
+    if (
+        "status" in report.content &&
+        report.content.status === "exported"
+    ) {
+        const formats = Object.keys(report.content.artifacts)
+            .map((format) => format.toUpperCase())
+            .join("、");
+        return `${report.content.export_id} · ${formats}`;
+    }
+    if ("content_type" in report.content) {
+        return `舊版 schema ${report.content.stored_schema_version}`;
+    }
+    return "—";
+}
+
 function recommendation(
     result: ResultResponse,
     profile: "conservative" | "balanced" | "aggressive",
@@ -70,6 +98,9 @@ function bestCandidate(result: ResultResponse) {
 export function ReportsPage() {
     const { api, capability } = useResearchData();
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    const [exportResultId, setExportResultId] = useState("");
+    const [selectedFormats, setSelectedFormats] =
+        useState<ReportFormat[]>([...reportFormats]);
     const resultsQuery = useQuery({
         queryKey: ["results"],
         queryFn: api.listResults,
@@ -77,6 +108,11 @@ export function ReportsPage() {
     const reportsQuery = useQuery({
         queryKey: ["reports"],
         queryFn: api.listReports,
+    });
+    const exportMutation = useMutation({
+        mutationFn: (request: ReportExportRequest) =>
+            api.exportReport(request),
+        onSuccess: () => reportsQuery.refetch(),
     });
 
     if (resultsQuery.isPending || reportsQuery.isPending) {
@@ -105,6 +141,11 @@ export function ReportsPage() {
 
     const results = resultsQuery.data.results;
     const reports = reportsQuery.data.reports;
+    const effectiveExportResultId = results.some(
+        (result) => result.id === exportResultId,
+    )
+        ? exportResultId
+        : (results[0]?.id ?? "");
     const selected = selectedIds
         .map((id) => results.find((result) => result.id === id))
         .filter((result): result is ResultResponse => result !== undefined);
@@ -196,7 +237,168 @@ export function ReportsPage() {
                 </>
             )}
 
+            <ReportExportPanel
+                capability={capability}
+                results={results}
+                resultId={effectiveExportResultId}
+                selectedFormats={selectedFormats}
+                pending={exportMutation.isPending}
+                error={exportMutation.isError}
+                exported={exportMutation.data}
+                onResultChange={setExportResultId}
+                onFormatChange={(format, checked) => {
+                    setSelectedFormats((current) =>
+                        checked
+                            ? reportFormats.filter(
+                                  (candidate) =>
+                                      current.includes(candidate) ||
+                                      candidate === format,
+                              )
+                            : current.filter(
+                                  (candidate) => candidate !== format,
+                              ),
+                    );
+                }}
+                onExport={() => {
+                    exportMutation.mutate({
+                        schema_version: "1.0",
+                        result_id: effectiveExportResultId,
+                        formats: selectedFormats,
+                    });
+                }}
+            />
             <ReportRegister reports={reports} />
+        </section>
+    );
+}
+
+function ReportExportPanel({
+    capability,
+    results,
+    resultId,
+    selectedFormats,
+    pending,
+    error,
+    exported,
+    onResultChange,
+    onFormatChange,
+    onExport,
+}: {
+    capability: ReturnType<typeof useResearchData>["capability"];
+    results: readonly ResultResponse[];
+    resultId: string;
+    selectedFormats: readonly ReportFormat[];
+    pending: boolean;
+    error: boolean;
+    exported: ReportExportResponse | undefined;
+    onResultChange: (resultId: string) => void;
+    onFormatChange: (format: ReportFormat, checked: boolean) => void;
+    onExport: () => void;
+}) {
+    if (capability.mode === "static") {
+        return (
+            <section
+                className="report-export-panel"
+                aria-labelledby="public-report-heading"
+            >
+                <div>
+                    <p className="eyebrow">Public fallback</p>
+                    <h2 id="public-report-heading">已公開報告</h2>
+                    <p>
+                        靜態備援不連接私人資料庫，只顯示經過隱私與內容一致性驗證的固定報告。
+                    </p>
+                </div>
+                <a
+                    className="report-export-panel__public-link"
+                    href={`${import.meta.env.BASE_URL}reports/index.html`}
+                >
+                    開啟已公開報告清單
+                </a>
+            </section>
+        );
+    }
+
+    const submit = (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        onExport();
+    };
+    return (
+        <section
+            className="report-export-panel"
+            aria-labelledby="private-export-heading"
+        >
+            <div>
+                <p className="eyebrow">Private export</p>
+                <h2 id="private-export-heading">建立可驗證報告 bundle</h2>
+                <p>
+                    此動作只建立私人 bundle；公開仍須經過獨立的發布與隱私檢查。
+                </p>
+            </div>
+            <form onSubmit={submit}>
+                <label className="report-export-panel__result">
+                    <span>匯出結果</span>
+                    <select
+                        aria-label="匯出結果"
+                        value={resultId}
+                        disabled={pending || results.length === 0}
+                        onChange={(event) =>
+                            onResultChange(event.currentTarget.value)
+                        }
+                    >
+                        {results.map((result) => (
+                            <option key={result.id} value={result.id}>
+                                {result.id}
+                                {isOptimizationResult(result)
+                                    ? ` · ${result.payload.provenance.target_symbol}`
+                                    : ""}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+                <fieldset>
+                    <legend>格式</legend>
+                    {reportFormats.map((format) => (
+                        <label key={format}>
+                            <input
+                                type="checkbox"
+                                checked={selectedFormats.includes(format)}
+                                disabled={pending}
+                                onChange={(event) =>
+                                    onFormatChange(
+                                        format,
+                                        event.currentTarget.checked,
+                                    )
+                                }
+                            />
+                            <span>{format.toUpperCase()}</span>
+                        </label>
+                    ))}
+                </fieldset>
+                <button
+                    type="submit"
+                    disabled={
+                        pending ||
+                        resultId.length === 0 ||
+                        selectedFormats.length === 0
+                    }
+                >
+                    {pending ? "正在建立…" : "建立私人匯出"}
+                </button>
+            </form>
+            {error ? (
+                <p className="action-status is-error" role="alert">
+                    匯出失敗；結果或資料 lineage 不完整時系統會拒絕建立報告。
+                </p>
+            ) : null}
+            {exported === undefined ? null : (
+                <p className="action-status" role="status">
+                    已建立 {exported.export_id}（
+                    {Object.keys(exported.artifacts)
+                        .map((format) => format.toUpperCase())
+                        .join("、")}
+                    ）。仍位於私人報告目錄。
+                </p>
+            )}
         </section>
     );
 }
@@ -364,6 +566,7 @@ function ReportRegister({
                                 <th scope="col">結果 ID</th>
                                 <th scope="col">建立時間</th>
                                 <th scope="col">匯出狀態</th>
+                                <th scope="col">匯出內容</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -391,6 +594,9 @@ function ReportRegister({
                                                 ? "已匯出"
                                                 : "尚未匯出"}
                                         </span>
+                                    </td>
+                                    <td>
+                                        {exportedContentSummary(report)}
                                     </td>
                                 </tr>
                             ))}

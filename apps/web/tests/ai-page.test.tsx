@@ -293,6 +293,23 @@ describe("AI-operable optimization workbench", () => {
         expect(
             screen.getByRole("table", { name: "Pareto 候選策略" }),
         ).toHaveTextContent("25% / 35% / 40%");
+        expect(
+            screen.getByRole("table", { name: "Pareto 候選策略" }),
+        ).toHaveTextContent("Walk-forward");
+        expect(
+            screen.getByRole("table", { name: "Pareto 候選策略" }),
+        ).toHaveTextContent("合格");
+        expect(
+            screen.getByRole("button", { name: "下載結果 JSON" }),
+        ).toHaveAttribute("data-ai-action", "download-result-json");
+        const machineResult =
+            document.querySelector<HTMLTextAreaElement>(
+                "[data-ai-result='result-json']",
+            );
+        expect(machineResult).not.toBeNull();
+        expect(
+            JSON.parse(machineResult?.value ?? "{}"),
+        ).toMatchObject({ id: "result-1" });
         expect(api.createOptimization).toHaveBeenCalledWith(
             expect.objectContaining({
                 family_id: "nasdaq-100",

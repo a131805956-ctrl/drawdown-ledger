@@ -84,6 +84,43 @@ describe("research API clients", () => {
         );
     });
 
+    it("exports a trusted result with explicit report formats", async () => {
+        const fetcher = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    schema_version: "1.0",
+                    export_id: "export-0123456789abcdef01234567",
+                    result_id: "result-1",
+                    artifacts: {},
+                    lineage: {},
+                }),
+                {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        );
+        const api = createLiveResearchApi({ fetcher });
+
+        await api.exportReport({
+            schema_version: "1.0",
+            result_id: "result-1",
+            formats: ["html", "json"],
+        });
+
+        expect(fetcher).toHaveBeenCalledWith(
+            "/api/v1/reports/export",
+            expect.objectContaining({
+                method: "POST",
+                body: JSON.stringify({
+                    schema_version: "1.0",
+                    result_id: "result-1",
+                    formats: ["html", "json"],
+                }),
+            }),
+        );
+    });
+
     it("serves static capability data without any network request", async () => {
         const fetchSpy = vi.spyOn(globalThis, "fetch");
         const api = createStaticResearchApi({
@@ -151,5 +188,17 @@ describe("research API clients", () => {
                 threshold: 0.3,
             }),
         ).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("never exports private results from static backup mode", async () => {
+        const api = createStaticResearchApi();
+
+        await expect(
+            api.exportReport({
+                schema_version: "1.0",
+                result_id: "result-1",
+                formats: ["json"],
+            }),
+        ).rejects.toMatchObject({ status: 405 });
     });
 });

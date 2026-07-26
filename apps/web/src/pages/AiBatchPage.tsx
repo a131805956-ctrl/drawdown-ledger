@@ -74,6 +74,19 @@ function copyText(value: string): Promise<void> {
     return navigator.clipboard.writeText(value);
 }
 
+function downloadJson(filename: string, value: unknown): void {
+    const objectUrl = URL.createObjectURL(
+        new Blob([JSON.stringify(value, null, 2)], {
+            type: "application/json",
+        }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(objectUrl);
+}
+
 export function AiBatchPage() {
     const { api, capability } = useResearchData();
     const [parameters] = useSearchParams();
@@ -231,15 +244,10 @@ export function AiBatchPage() {
         createJob.mutate();
     };
     const downloadConfiguration = () => {
-        const contents = JSON.stringify(buildRequest(), null, 2);
-        const objectUrl = URL.createObjectURL(
-            new Blob([contents], { type: "application/json" }),
+        downloadJson(
+            "drawdown-optimization-request.json",
+            buildRequest(),
         );
-        const anchor = document.createElement("a");
-        anchor.href = objectUrl;
-        anchor.download = "drawdown-optimization-request.json";
-        anchor.click();
-        URL.revokeObjectURL(objectUrl);
     };
     const importConfiguration = async (
         event: ChangeEvent<HTMLInputElement>,
@@ -338,8 +346,8 @@ export function AiBatchPage() {
         "3. 依序設定 family_id、target_symbol、depths_percent、ratio_step_percent。",
         "4. 點擊 [data-ai-action='run-optimization']。",
         "5. 監看 [data-ai-status='optimization-job']，直到 succeeded、failed 或 cancelled。",
-        "6. 讀取 [data-ai-result='recommendations'] 與 [data-ai-result='pareto-table']。",
-        "7. 先比較 walk-forward、最差 5%、現金耗盡率與鄰域穩定性，再選比例。",
+        "6. 讀取 [data-ai-result='recommendations']、[data-ai-result='pareto-table'] 與 [data-ai-result='result-json']。",
+        "7. 只比較 walk_forward_eligible 合格候選，再檢查最差 5%、現金耗盡率與鄰域穩定性。",
         "8. 禁止把 exploration_only 結果描述成正式推薦。",
         "此流程不需要 API key，也不應輸入任何密鑰。",
     ].join("\n");
@@ -893,11 +901,31 @@ function OptimizationResult({ result }: { result: ResultResponse }) {
                     <p className="eyebrow">Out-of-sample selection</p>
                     <h2>三種可執行方案</h2>
                 </div>
-                <span>
-                    {payload.independent_episode_count} 次獨立事件 ·{" "}
-                    {payload.provenance.walk_forward_splits} folds
-                </span>
+                <div className="optimization-result__actions">
+                    <span>
+                        {payload.independent_episode_count} 次獨立事件 ·{" "}
+                        {payload.provenance.walk_forward_splits} folds
+                    </span>
+                    <button
+                        type="button"
+                        data-ai-action="download-result-json"
+                        onClick={() =>
+                            downloadJson(
+                                `drawdown-result-${result.id}.json`,
+                                result,
+                            )
+                        }
+                    >
+                        下載結果 JSON
+                    </button>
+                </div>
             </div>
+            <textarea
+                hidden
+                readOnly
+                data-ai-result="result-json"
+                value={JSON.stringify(result)}
+            />
             <div
                 className="recommendation-grid"
                 data-ai-result="recommendations"
@@ -965,6 +993,7 @@ function OptimizationResult({ result }: { result: ResultResponse }) {
                         <tr>
                             <th scope="col">比例</th>
                             <th scope="col">Pareto</th>
+                            <th scope="col">Walk-forward</th>
                             <th scope="col">樣本外 XIRR</th>
                             <th scope="col">穩定性調整</th>
                             <th scope="col">穩定分數</th>
@@ -983,6 +1012,11 @@ function OptimizationResult({ result }: { result: ResultResponse }) {
                                 </th>
                                 <td>
                                     {candidate.pareto_member ? "是" : "否"}
+                                </td>
+                                <td>
+                                    {candidate.walk_forward_eligible
+                                        ? "合格"
+                                        : "不合格"}
                                 </td>
                                 <td>{percent(candidate.oos_xirr)}</td>
                                 <td>
