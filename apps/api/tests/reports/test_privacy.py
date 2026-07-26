@@ -160,9 +160,15 @@ def _write_export_bundle(
         ('{"token":"sk-\\u0070roj-abcdefgh"}', "secret"),
         ('{"full_name":"Alice Smith"}', "private_field"),
         ('{"fullName":"Alice Smith"}', "private_field"),
+        ('{"fullname":"Alice Smith"}', "private_field"),
+        ('{"firstname":"Alice"}', "private_field"),
+        ('{"lastname":"Smith"}', "private_field"),
+        ('{"username":"alice"}', "private_field"),
         ('{"refresh_token":"redacted"}', "secret"),
         ('{"authToken":"redacted"}', "secret"),
         ('{"session-token":"redacted"}', "secret"),
+        ('{"credential":"redacted"}', "secret"),
+        ('{"credentials":"redacted"}', "secret"),
         ('{"title":"<script>alert(1)</script>"}', "active_content"),
         ('{"formula":"=HYPERLINK(\\"https://example.test\\")"}', "unsafe_formula"),
     ],
@@ -200,9 +206,15 @@ def test_private_strategy_field_in_csv_blocks_publication(tmp_path: Path) -> Non
     [
         ("full_name", "private_field"),
         ("fullName", "private_field"),
+        ("fullname", "private_field"),
+        ("firstname", "private_field"),
+        ("lastname", "private_field"),
+        ("username", "private_field"),
         ("refresh_token", "secret"),
         ("authToken", "secret"),
         ("session-token", "secret"),
+        ("credential", "secret"),
+        ("credentials", "secret"),
     ],
 )
 def test_normalized_private_csv_headers_fail_closed(
@@ -219,21 +231,35 @@ def test_normalized_private_csv_headers_fail_closed(
     assert expected_code in {finding.code for finding in result.findings}
 
 
-def test_complete_bundle_with_full_name_parameter_fails_closed(
+@pytest.mark.parametrize(
+    ("field_name", "expected_code"),
+    [
+        ("full_name", "private_field"),
+        ("fullname", "private_field"),
+        ("firstname", "private_field"),
+        ("lastname", "private_field"),
+        ("username", "private_field"),
+        ("credential", "secret"),
+        ("credentials", "secret"),
+    ],
+)
+def test_complete_bundle_with_private_or_secret_parameter_fails_closed(
     tmp_path: Path,
+    field_name: str,
+    expected_code: str,
 ) -> None:
     bundle = _write_export_bundle(
         tmp_path,
         parameters={
             "family_id": "nasdaq-100",
-            "full_name": "Alice Smith",
+            field_name: "redacted",
         },
     )
 
     result = privacy_scan(bundle)
 
     assert result.allowed is False
-    assert "private_field" in {finding.code for finding in result.findings}
+    assert expected_code in {finding.code for finding in result.findings}
 
 
 def test_clean_relative_report_bundle_is_allowed(tmp_path: Path) -> None:

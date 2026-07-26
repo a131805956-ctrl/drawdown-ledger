@@ -109,12 +109,20 @@ _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _WINDOWS_REPARSE_POINT = 0x400
 _PRIVATE_JSON_FIELDS = _PRIVATE_CSV_FIELDS | frozenset(
-    {"private_metadata"}
+    {
+        "firstname",
+        "fullname",
+        "lastname",
+        "private_metadata",
+        "username",
+    }
 )
 _SECRET_JSON_FIELDS = frozenset(
     {
         "api_key",
         "access_token",
+        "credential",
+        "credentials",
         "password",
         "secret",
         "secret_key",
