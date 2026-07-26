@@ -53,6 +53,9 @@ $health.coverage | Format-Table
 ```
 
 腳本驗證 manifest、結果雜湊、schema、lineage 與隱私欄位。只有通過的 bundle 會複製到 `reports/published`。
+它預設使用 `Start.ps1` 建立的專案 `.venv`，不依賴 PATH 上另一套 Python。
+只有維護者刻意使用其他已安裝完整專案相依的環境時，才傳入
+`-PythonExecutable`。
 
 提交前再次執行：
 

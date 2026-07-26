@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Path,
 
-    [string]$PythonExecutable = 'python'
+    [string]$PythonExecutable
 )
 
 Set-StrictMode -Version Latest
@@ -11,6 +11,12 @@ $ErrorActionPreference = 'Stop'
 
 $ResolvedPath = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
+Import-Module (
+    Join-Path $PSScriptRoot 'lib\PythonRuntime.psm1'
+) -Force
+$PythonExecutable = Resolve-DrawdownProjectPython `
+    -ProjectRoot $RepositoryRoot `
+    -PythonExecutable $PythonExecutable
 $SourceRoot = Join-Path $RepositoryRoot 'apps\api\src'
 if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
     throw 'Unable to locate the Drawdown Lab Python source directory.'

@@ -7,7 +7,7 @@ param(
 
     [string]$PublishedRoot,
 
-    [string]$PythonExecutable = 'python'
+    [string]$PythonExecutable
 )
 
 Set-StrictMode -Version Latest
@@ -63,6 +63,12 @@ if (
 }
 
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
+Import-Module (
+    Join-Path $PSScriptRoot 'lib\PythonRuntime.psm1'
+) -Force
+$PythonExecutable = Resolve-DrawdownProjectPython `
+    -ProjectRoot $RepositoryRoot `
+    -PythonExecutable $PythonExecutable
 if ([string]::IsNullOrWhiteSpace($PrivateRoot)) {
     $PrivateRoot = Join-Path $RepositoryRoot 'reports\private'
 }

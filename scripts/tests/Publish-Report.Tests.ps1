@@ -425,4 +425,73 @@ print(json.dumps({"ExportId": export_id, "Source": str(source)}))
             -Actual (Test-Path (Join-Path $PublishedRoot $ExportId)) `
             -Expected $false
     }
+
+    It 'uses the project virtualenv when PATH Python has no project dependencies' {
+        $IsolatedRoot = Join-Path $TestDrive 'isolated-publication'
+        $IsolatedScripts = Join-Path $IsolatedRoot 'scripts'
+        $IsolatedLibrary = Join-Path $IsolatedScripts 'lib'
+        $IsolatedSource = Join-Path (
+            $IsolatedRoot
+        ) 'apps\api\src\drawdown_lab\reports'
+        $IsolatedVenv = Join-Path $IsolatedRoot '.venv\Scripts'
+        $ScanTarget = Join-Path $IsolatedRoot 'scan-target'
+        New-Item -ItemType Directory -Path $IsolatedLibrary -Force |
+            Out-Null
+        New-Item -ItemType Directory -Path $IsolatedSource -Force |
+            Out-Null
+        New-Item -ItemType Directory -Path $IsolatedVenv -Force |
+            Out-Null
+        New-Item -ItemType Directory -Path $ScanTarget -Force |
+            Out-Null
+        Copy-Item `
+            -LiteralPath $PrivacyScript `
+            -Destination (Join-Path $IsolatedScripts 'Test-PublishedPrivacy.ps1')
+        Copy-Item `
+            -LiteralPath (
+                Join-Path $RepositoryRoot 'scripts\lib\PythonRuntime.psm1'
+            ) `
+            -Destination (Join-Path $IsolatedLibrary 'PythonRuntime.psm1')
+        Set-Content `
+            -LiteralPath (
+                Join-Path $IsolatedRoot 'apps\api\src\drawdown_lab\__init__.py'
+            ) `
+            -Value '' `
+            -Encoding UTF8
+        Set-Content `
+            -LiteralPath (Join-Path $IsolatedSource '__init__.py') `
+            -Value '' `
+            -Encoding UTF8
+        Set-Content `
+            -LiteralPath (Join-Path $IsolatedSource 'privacy.py') `
+            -Value 'print("{\"allowed\":true,\"scanned_files\":1}")' `
+            -Encoding UTF8
+        $Marker = Join-Path $IsolatedRoot 'venv-python-used.txt'
+        $VenvPython = Join-Path $IsolatedVenv 'python.ps1'
+        [IO.File]::WriteAllText(
+            $VenvPython,
+            (
+                'param([Parameter(ValueFromRemainingArguments = $true)]' +
+                "[object[]]`$PythonArguments)`r`n" +
+                ('Set-Content -LiteralPath "{0}" -Value used' -f $Marker) +
+                "`r`n" +
+                ('& "{0}" @PythonArguments' -f $PythonExecutable) +
+                "`r`nexit `$LASTEXITCODE`r`n"
+            ),
+            (New-Object Text.UTF8Encoding($false))
+        )
+        $PreviousPath = $env:PATH
+        try {
+            $env:PATH = ''
+            $Result = & (
+                Join-Path $IsolatedScripts 'Test-PublishedPrivacy.ps1'
+            ) -Path $ScanTarget
+        }
+        finally {
+            $env:PATH = $PreviousPath
+        }
+
+        Assert-Equal -Actual $Result.Allowed -Expected $true
+        Assert-Equal -Actual $Result.ScannedFiles -Expected 1
+        Assert-Equal -Actual (Test-Path -LiteralPath $Marker) -Expected $true
+    }
 }
