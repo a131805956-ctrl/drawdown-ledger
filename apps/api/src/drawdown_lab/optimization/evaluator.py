@@ -316,6 +316,19 @@ def historical_request_from_payload(
             max_longest_trap_days=int(values["max_longest_trap_days"]),
         )
 
+    def contribution_event(event: dict[str, Any]) -> ContributionEvent:
+        kind = str(event["kind"])
+        if kind in {"bonus", "override"} and "amount" not in event:
+            raise ValueError(f"{kind} events require an amount")
+        return ContributionEvent(
+            month=date.fromisoformat(str(event["month"])),
+            kind=cast(
+                Literal["bonus", "override", "pause", "resume"],
+                kind,
+            ),
+            amount=quantize_money(Decimal(str(event.get("amount", "0")))),
+        )
+
     return HistoricalOptimizationRequest(
         family_id=str(payload["family_id"]),
         prototype_symbol=str(payload["prototype_symbol"]),
@@ -332,14 +345,7 @@ def historical_request_from_payload(
             annual_contribution_growth=Decimal(str(strategy["annual_contribution_growth"])),
             contribution_day=int(strategy["contribution_day"]),
             contribution_events=tuple(
-                ContributionEvent(
-                    month=date.fromisoformat(str(event["month"])),
-                    kind=cast(
-                        Literal["bonus", "override", "pause", "resume"],
-                        str(event["kind"]),
-                    ),
-                    amount=quantize_money(Decimal(str(event.get("amount", "0")))),
-                )
+                contribution_event(event)
                 for event in contribution_events
             ),
             cash_interest_rate=Decimal(str(strategy["cash_interest_rate"])),

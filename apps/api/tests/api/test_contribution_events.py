@@ -272,6 +272,21 @@ def test_persisted_pause_resume_amount_semantics_are_revalidated(kind: str) -> N
         historical_request_from_payload(stored)
 
 
+@pytest.mark.parametrize("kind", ["bonus", "override"])
+def test_persisted_cash_event_requires_amount(kind: str) -> None:
+    request = OptimizationCreateRequest.model_validate(_request()).to_domain(
+        prototype_symbol="QQQ",
+        target_leverage=3,
+    )
+    stored = historical_request_to_payload(request)
+    stored["strategy"]["contribution_events"] = [
+        {"month": "2020-02-01", "kind": kind}
+    ]
+
+    with pytest.raises(ValueError, match=f"{kind} events require an amount"):
+        historical_request_from_payload(stored)
+
+
 @pytest.mark.parametrize(
     "amount",
     [
