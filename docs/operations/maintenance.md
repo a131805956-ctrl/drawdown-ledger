@@ -75,6 +75,7 @@ python -m mypy apps/api/src
 python -m pytest -q
 npm --prefix apps/web run test -- --run
 npm run test:e2e
+npm run test:e2e:static
 Invoke-Pester -Path tests/powershell
 ```
 

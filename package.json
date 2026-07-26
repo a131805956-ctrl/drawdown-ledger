@@ -5,6 +5,7 @@
   "scripts": {
     "test:data": "python -m pytest apps/api/tests/data -q",
     "test:e2e": "playwright test",
+    "test:e2e:static": "playwright test --config playwright.static.config.ts",
     "test:e2e:headed": "playwright test --headed",
     "typecheck:e2e": "tsc --project tsconfig.json"
   },

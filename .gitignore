@@ -25,7 +25,9 @@ build/
 node_modules/
 apps/web/node_modules/
 apps/web/dist/
+apps/web/dist-static/
 playwright-report/
+playwright-report-static/
 test-results/
 coverage/
 .playwright-cli/

@@ -122,6 +122,7 @@ npm --prefix apps/web run test -- --run
 npm ci
 npx playwright install chromium
 npm run test:e2e
+npm run test:e2e:static
 ```
 
 ## 操作文件

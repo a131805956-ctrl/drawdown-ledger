@@ -75,12 +75,14 @@ jobs:
       - run: npm run typecheck:e2e
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - run: npm run test:e2e:static
       - if: always()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |
             playwright-report
+            playwright-report-static
             test-results
           if-no-files-found: error
           retention-days: 14
