@@ -26,6 +26,9 @@ const RouterContext = createContext<RouterContextValue | null>(null);
 const OutletContext = createContext<ReactNode>(null);
 
 function normaliseBasename(value: string): string {
+    if (value === "." || value === "./") {
+        return "";
+    }
     const withLeadingSlash = value.startsWith("/") ? value : `/${value}`;
     const withoutTrailingSlash = withLeadingSlash.replace(/\/+$/, "");
     return withoutTrailingSlash === "/" ? "" : withoutTrailingSlash;
@@ -40,7 +43,11 @@ function parseTarget(target: string): RouterLocation {
 }
 
 function locationFromWindow(basename: string): RouterLocation {
-    const pathname = window.location.pathname.startsWith(basename)
+    const isWithinBase =
+        basename === "" ||
+        window.location.pathname === basename ||
+        window.location.pathname.startsWith(`${basename}/`);
+    const pathname = isWithinBase
         ? window.location.pathname.slice(basename.length) || "/"
         : window.location.pathname;
     return { pathname, search: window.location.search };
