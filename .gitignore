@@ -25,7 +25,9 @@ build/
 node_modules/
 apps/web/node_modules/
 apps/web/dist/
+apps/web/dist-static/
 playwright-report/
+playwright-report-static/
 test-results/
 coverage/
 .playwright-cli/
@@ -34,8 +36,18 @@ output/
 # Private market and research data
 /data/
 reports/private/
-reports/published/*
-!reports/published/.gitkeep
+research-request.json
+research-request.*.json
+research-config.json
+research-config.*.json
+strategy-config.json
+strategy-config.*.json
+!research-request.example.json
+!research-request.demo.json
+!research-config.example.json
+!research-config.demo.json
+!strategy-config.example.json
+!strategy-config.demo.json
 *.sqlite
 *.sqlite3
 *.db

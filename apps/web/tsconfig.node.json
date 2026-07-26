@@ -9,6 +9,9 @@
     "skipLibCheck": true,
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true,
+    "types": [
+      "node"
+    ],
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,

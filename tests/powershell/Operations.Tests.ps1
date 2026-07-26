@@ -1,5 +1,8 @@
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $ModulePath = Join-Path $ProjectRoot 'scripts\lib\ProcessState.psm1'
+$PublicAccessModulePath = Join-Path (
+    $ProjectRoot
+) 'scripts\lib\PublicAccess.psm1'
 
 function Set-TestProcessIdentity {
     param(
@@ -51,6 +54,37 @@ Describe 'Process state module contract' {
             Should Not BeNullOrEmpty
         Get-Command Start-ProjectProcess -ErrorAction SilentlyContinue |
             Should Not BeNullOrEmpty
+    }
+}
+
+Describe 'Public access credential boundary' {
+    BeforeEach {
+        Import-Module $PublicAccessModulePath -Force
+    }
+
+    It 'creates and reuses one strong project-local credential' {
+        $path = Join-Path $TestDrive 'runtime\public-access.json'
+
+        $first = New-DrawdownPublicCredential -Path $path
+        $second = New-DrawdownPublicCredential -Path $path
+
+        $first.Username | Should Be 'drawdown'
+        $first.Password | Should Match '^[A-Za-z0-9_-]{43}$'
+        $second.Password | Should Be $first.Password
+        $second.Path | Should Be ([IO.Path]::GetFullPath($path))
+        (Get-ChildItem `
+            -LiteralPath (Split-Path -Parent $path) `
+            -Filter '*.tmp').Count |
+            Should Be 0
+    }
+
+    It 'rejects a malformed credential instead of weakening protection' {
+        $path = Join-Path $TestDrive 'invalid-public-access.json'
+        '{"schema_version":1,"username":"drawdown","password":"short"}' |
+            Set-Content -LiteralPath $path -Encoding UTF8
+
+        { Read-DrawdownPublicCredential -Path $path } |
+            Should Throw
     }
 }
 
@@ -1154,6 +1188,7 @@ Describe 'One-click lifecycle dry runs' {
         $plan.Port | Should Be 9876
         $plan.Factory | Should Be 'drawdown_lab.runtime:create_runtime_app'
         $plan.WillUpdateData | Should Be $true
+        $plan.PublicAccessProtected | Should Be $true
     }
 
     It 'plans only the dedicated Funnel path' {

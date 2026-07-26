@@ -1,0 +1,44 @@
+name: 功能需求
+description: 提出可驗證的研究、介面或維運功能
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        請寫出研究目的、可驗證結果與資料邊界。
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 預期結果
+      description: 使用者完成什麼工作，畫面或 API 應顯示什麼？
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 分析與資料需求
+      description: 列出標的、期間、回撤定義、執行時點與必要統計。
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: 隱私與公開邊界
+      description: 哪些內容可進 Git、Pages 或 Funnel？哪些必須留在本機？
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 驗收條件
+      description: 列出測試、型別、建置、瀏覽器或維運驗證。
+    validations:
+      required: true
+  - type: checkboxes
+    id: semantics
+    attributes:
+      label: 研究語意確認
+      options:
+        - label: 我已區分價格回撤與總報酬
+        - label: 我已說明訊號日與執行日
+        - label: 我沒有把歷史結果描述成未來保證
