@@ -359,6 +359,113 @@ Describe 'Path-owned Funnel cleanup' {
         Test-Path -LiteralPath $script:OwnedStatePath | Should Be $true
     }
 
+    It 'never restores a non-project path even when caller expectations are tampered' {
+        [IO.File]::WriteAllText(
+            $script:OwnedStatePath,
+            (@{
+                schema_version = 2
+                replacement_target = '127.0.0.1:4174'
+                public_path = '/eng-vocabulary'
+                https_port = 443
+                previous_route = $null
+            } | ConvertTo-Json -Depth 10),
+            (New-Object Text.UTF8Encoding($false))
+        )
+        Mock Get-FunnelStatus {
+            @{
+                Occupied = $true
+                Routes = @(
+                    @{
+                        Path = '/eng-vocabulary'
+                        Target = '127.0.0.1:4174'
+                        HttpsPort = 443
+                    }
+                )
+                RawJson = '{"existing":true}'
+            }
+        } -ModuleName FunnelState
+
+        {
+            Restore-DrawdownFunnel `
+                -StatePath $script:OwnedStatePath `
+                -ExpectedPublicPath '/eng-vocabulary' `
+                -ExpectedTarget '127.0.0.1:4174'
+        } | Should Throw
+
+        Assert-MockCalled Get-FunnelStatus 0 -ModuleName FunnelState -Scope It
+        Assert-MockCalled Invoke-TailscaleCommand 0 -ModuleName FunnelState -Scope It
+        Test-Path -LiteralPath $script:OwnedStatePath | Should Be $true
+    }
+
+    It 'rejects tampered previous-route path, port, proxy, or target before mutation' {
+        Mock Get-FunnelStatus {
+            @{
+                Occupied = $true
+                Routes = @(
+                    @{
+                        Path = '/drawdown-ledger'
+                        Target = '127.0.0.1:8787'
+                        HttpsPort = 443
+                    },
+                    @{
+                        Path = '/eng-vocabulary'
+                        Target = '127.0.0.1:4174'
+                        HttpsPort = 443
+                    }
+                )
+                RawJson = '{"existing":true}'
+            }
+        } -ModuleName FunnelState
+        Mock Set-FunnelTarget {} -ModuleName FunnelState
+        $tamperedRoutes = @(
+            @{
+                path = '/eng-vocabulary'
+                target = '127.0.0.1:4174'
+                proxy = 'http://127.0.0.1:4174/'
+                https_port = 443
+            },
+            @{
+                path = '/drawdown-ledger'
+                target = '127.0.0.1:4174'
+                proxy = 'http://127.0.0.1:4174/'
+                https_port = 8443
+            },
+            @{
+                path = '/drawdown-ledger'
+                target = '192.168.1.2:4174'
+                proxy = 'http://192.168.1.2:4174/'
+                https_port = 443
+            },
+            @{
+                path = '/drawdown-ledger'
+                target = '127.0.0.1:4175'
+                proxy = 'http://127.0.0.1:4174/'
+                https_port = 443
+            }
+        )
+
+        foreach ($tamperedRoute in $tamperedRoutes) {
+            Write-TestFunnelState `
+                -Path $script:OwnedStatePath `
+                -PreviousRoute $tamperedRoute
+            $caught = $null
+            try {
+                Restore-DrawdownFunnel -StatePath $script:OwnedStatePath
+            }
+            catch {
+                $caught = $_
+            }
+
+            $caught | Should Not BeNullOrEmpty
+            $caught.Exception.Message | Should Match 'previous route'
+            Test-Path -LiteralPath $script:OwnedStatePath | Should Be $true
+        }
+
+        Assert-MockCalled Get-FunnelStatus 0 -ModuleName FunnelState -Scope It
+        Assert-MockCalled Set-FunnelTarget 0 -ModuleName FunnelState -Scope It
+        Assert-MockCalled Invoke-TailscaleCommand 0 -ModuleName FunnelState -Scope It
+    }
+
     It 'restores only the explicitly replaced path' {
         $previous = @{
             path = '/drawdown-ledger'

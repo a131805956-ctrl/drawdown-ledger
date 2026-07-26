@@ -88,7 +88,7 @@ Describe 'Project process ownership' {
     It 'validates a live process before it can be managed' {
         $arguments = (
             '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
-            "drawdown-test-marker $ProjectRoot" +
+            "drawdown-test-marker $ProjectRoot --port 8787" +
             '"'
         )
         $process = Start-Process `
@@ -101,7 +101,9 @@ Describe 'Project process ownership' {
             Test-ProjectProcess `
                 -Id $process.Id `
                 -ProjectRoot $ProjectRoot `
-                -CommandMarker 'drawdown-test-marker' |
+                -CommandMarker 'drawdown-test-marker' `
+                -ExpectedArgumentList $arguments `
+                -ExpectedPort 8787 |
                 Should Be $true
         }
         finally {
@@ -185,7 +187,7 @@ Describe 'Safe process stopping' {
     It 'stops and clears state only after ownership validation succeeds' {
         $arguments = (
             '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
-            "managed-marker $ProjectRoot" +
+            "managed-marker $ProjectRoot --port 8787" +
             '"'
         )
         $process = Start-Process `
@@ -200,7 +202,9 @@ Describe 'Safe process stopping' {
                 -Id $process.Id `
                 -ProjectRoot $ProjectRoot `
                 -CommandMarker 'managed-marker' `
-                -ServiceName 'test'
+                -ServiceName 'test' `
+                -ArgumentList $arguments `
+                -Port 8787
 
             $result = Stop-ProjectProcess `
                 -StatePath $statePath `
@@ -243,6 +247,98 @@ Describe 'Safe process stopping' {
             Should Be $false
         Test-Path -LiteralPath $statePath | Should Be $false
     }
+
+    It 'refuses to stop a PID-reused process whose real arguments differ from state' {
+        $marker = 'pid-reuse-stop-marker'
+        $actualArguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 9999 reused" +
+            '"'
+        )
+        $savedArguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 8787 expected" +
+            '"'
+        )
+        $process = Start-Process `
+            -FilePath powershell.exe `
+            -ArgumentList $actualArguments `
+            -WindowStyle Hidden `
+            -PassThru
+        $statePath = Join-Path $TestDrive 'pid-reuse-stop.json'
+        try {
+            Start-Sleep -Milliseconds 150
+            Save-ProcessState `
+                -StatePath $statePath `
+                -Id $process.Id `
+                -ProjectRoot $ProjectRoot `
+                -CommandMarker $marker `
+                -ServiceName 'test' `
+                -ArgumentList $savedArguments `
+                -Port 8787
+
+            {
+                Stop-ProjectProcess `
+                    -StatePath $statePath `
+                    -ExpectedProjectRoot $ProjectRoot `
+                    -ExpectedCommandMarker $marker
+            } | Should Throw
+
+            (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) |
+                Should Not BeNullOrEmpty
+            Test-Path -LiteralPath $statePath | Should Be $true
+        }
+        finally {
+            $remaining = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($null -ne $remaining) {
+                Stop-Process -Id $process.Id -Force
+            }
+        }
+    }
+
+    It 'refuses extra live arguments that are absent from saved launch state' {
+        $marker = 'extra-argument-stop-marker'
+        $savedArguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 8787" +
+            '"'
+        )
+        $actualArguments = "-NoLogo $savedArguments"
+        $process = Start-Process `
+            -FilePath powershell.exe `
+            -ArgumentList $actualArguments `
+            -WindowStyle Hidden `
+            -PassThru
+        $statePath = Join-Path $TestDrive 'extra-argument-stop.json'
+        try {
+            Start-Sleep -Milliseconds 150
+            Save-ProcessState `
+                -StatePath $statePath `
+                -Id $process.Id `
+                -ProjectRoot $ProjectRoot `
+                -CommandMarker $marker `
+                -ServiceName 'test' `
+                -ArgumentList $savedArguments `
+                -Port 8787
+
+            {
+                Stop-ProjectProcess `
+                    -StatePath $statePath `
+                    -ExpectedProjectRoot $ProjectRoot `
+                    -ExpectedCommandMarker $marker
+            } | Should Throw
+
+            (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) |
+                Should Not BeNullOrEmpty
+            Test-Path -LiteralPath $statePath | Should Be $true
+        }
+        finally {
+            $remaining = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($null -ne $remaining) {
+                Stop-Process -Id $process.Id -Force
+            }
+        }
+    }
 }
 
 Describe 'Idempotent process startup' {
@@ -250,7 +346,7 @@ Describe 'Idempotent process startup' {
         $statePath = Join-Path $TestDrive 'start.json'
         $arguments = (
             '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
-            "start-marker $ProjectRoot" +
+            "start-marker $ProjectRoot --port 8787" +
             '"'
         )
         $first = $null
@@ -348,6 +444,60 @@ Describe 'Idempotent process startup' {
                 if ($null -ne $remaining) {
                     Stop-Process -Id $first.Id -Force
                 }
+            }
+        }
+    }
+
+    It 'does not reuse a PID whose real command line differs from saved launch state' {
+        $statePath = Join-Path $TestDrive 'pid-reuse-start.json'
+        $marker = 'pid-reuse-start-marker'
+        $actualArguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 9999 reused" +
+            '"'
+        )
+        $savedArguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 8787 expected" +
+            '"'
+        )
+        $process = Start-Process `
+            -FilePath powershell.exe `
+            -ArgumentList $actualArguments `
+            -WindowStyle Hidden `
+            -PassThru
+        try {
+            Start-Sleep -Milliseconds 150
+            Save-ProcessState `
+                -StatePath $statePath `
+                -Id $process.Id `
+                -ProjectRoot $ProjectRoot `
+                -CommandMarker $marker `
+                -ServiceName 'test' `
+                -ArgumentList $savedArguments `
+                -Port 8787
+
+            {
+                Start-ProjectProcess `
+                    -FilePath powershell.exe `
+                    -ArgumentList $savedArguments `
+                    -WorkingDirectory $ProjectRoot `
+                    -StatePath $statePath `
+                    -ProjectRoot $ProjectRoot `
+                    -CommandMarker $marker `
+                    -ServiceName 'test' `
+                    -Port 8787
+            } | Should Throw
+
+            (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) |
+                Should Not BeNullOrEmpty
+            $saved = Get-ProcessState -StatePath $statePath
+            $saved.pid | Should Be $process.Id
+        }
+        finally {
+            $remaining = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($null -ne $remaining) {
+                Stop-Process -Id $process.Id -Force
             }
         }
     }

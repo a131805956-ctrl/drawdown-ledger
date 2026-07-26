@@ -30,6 +30,86 @@ function Test-ProjectCommandLine {
     )
 }
 
+function Normalize-ProjectCommandLine {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$CommandLine
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) {
+        return ''
+    }
+    return [regex]::Replace($CommandLine.Trim(), '\s+', ' ')
+}
+
+function Test-ProjectLaunchArguments {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandLine,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$ExpectedArgumentList,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ExpectedPort
+    )
+
+    if ($ExpectedPort -lt 1 -or $ExpectedPort -gt 65535) {
+        return $false
+    }
+    $normalizedCommandLine = Normalize-ProjectCommandLine -CommandLine $CommandLine
+    $normalizedArguments = Normalize-ProjectCommandLine `
+        -CommandLine $ExpectedArgumentList
+    if (
+        [string]::IsNullOrWhiteSpace($normalizedCommandLine) -or
+        [string]::IsNullOrWhiteSpace($normalizedArguments)
+    ) {
+        return $false
+    }
+
+    $portMatches = [regex]::Matches(
+        $normalizedArguments,
+        '(?i)(?:^|\s)--port(?:\s+|=)(?<value>\S+)'
+    )
+    if ($portMatches.Count -ne 1) {
+        return $false
+    }
+    $portToken = $portMatches[0].Groups['value'].Value.Trim(
+        [char[]]@('"', "'")
+    )
+    $parsedPort = 0
+    if (
+        -not [int]::TryParse($portToken, [ref]$parsedPort) -or
+        $parsedPort -ne $ExpectedPort
+    ) {
+        return $false
+    }
+
+    if (-not $normalizedCommandLine.EndsWith(
+        $normalizedArguments,
+        [StringComparison]::Ordinal
+    )) {
+        return $false
+    }
+    $argumentStart = $normalizedCommandLine.Length - $normalizedArguments.Length
+    if (
+        $argumentStart -le 0 -or
+        -not [char]::IsWhiteSpace(
+            $normalizedCommandLine[$argumentStart - 1]
+        )
+    ) {
+        return $false
+    }
+    $executablePrefix = $normalizedCommandLine.Substring(
+        0,
+        $argumentStart
+    ).Trim()
+    return $executablePrefix -match '^(?:"[^"]+"|''[^'']+''|\S+)$'
+}
+
 function Get-ProcessState {
     [CmdletBinding()]
     param(
@@ -193,10 +273,46 @@ function Start-ProjectProcess {
         )) {
             throw "Process state does not belong to this project: $StatePath"
         }
-        if (Test-ProjectProcess `
+        $argumentsProperty = $state.PSObject.Properties['argument_list']
+        $portProperty = $state.PSObject.Properties['port']
+        $savedArgumentList = if ($null -eq $argumentsProperty) {
+            ''
+        }
+        else {
+            [string]$argumentsProperty.Value
+        }
+        $savedPort = 0
+        if ($null -ne $portProperty) {
+            [int]::TryParse(
+                [string]$portProperty.Value,
+                [ref]$savedPort
+            ) | Out-Null
+        }
+        $recordedProcess = Get-Process `
+            -Id ([int]$state.pid) `
+            -ErrorAction SilentlyContinue
+        if ($null -eq $recordedProcess) {
+            Remove-Item -LiteralPath $StatePath -Force
+        }
+        else {
+            try {
+                $null = $recordedProcess.Handle
+            }
+            catch {
+                throw (
+                    "Unable to acquire PID {0} safely; refusing to reuse it." -f
+                    $state.pid
+                )
+            }
+        }
+        if (
+            $null -ne $recordedProcess -and
+            (Test-ProjectProcess `
             -Id ([int]$state.pid) `
             -ProjectRoot ([string]$state.project_root) `
-            -CommandMarker ([string]$state.command_marker)
+            -CommandMarker ([string]$state.command_marker) `
+            -ExpectedArgumentList $savedArgumentList `
+            -ExpectedPort $savedPort)
         ) {
             if (-not (Test-ProcessStateLaunchConfiguration `
                 -State $state `
@@ -209,19 +325,15 @@ function Start-ProjectProcess {
                     'or startup arguments.'
                 )
             }
-            return Get-Process -Id ([int]$state.pid)
+            return $recordedProcess
         }
 
-        $recordedProcess = Get-Process `
-            -Id ([int]$state.pid) `
-            -ErrorAction SilentlyContinue
         if ($null -ne $recordedProcess) {
             throw (
                 "State file '{0}' points to PID {1}, which is not project-owned." -f
                 $StatePath, $state.pid
             )
         }
-        Remove-Item -LiteralPath $StatePath -Force
     }
 
     $process = Start-Process `
@@ -238,7 +350,9 @@ function Start-ProjectProcess {
     if (-not (Test-ProjectProcess `
         -Id $process.Id `
         -ProjectRoot $ProjectRoot `
-        -CommandMarker $CommandMarker
+        -CommandMarker $CommandMarker `
+        -ExpectedArgumentList $ArgumentList `
+        -ExpectedPort $Port
     )) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         throw "Started $ServiceName process failed project ownership validation."
@@ -265,7 +379,14 @@ function Test-ProjectProcess {
         [string]$ProjectRoot,
 
         [Parameter(Mandatory = $true)]
-        [string]$CommandMarker
+        [string]$CommandMarker,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$ExpectedArgumentList,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ExpectedPort
     )
 
     try {
@@ -280,10 +401,17 @@ function Test-ProjectProcess {
     if ($null -eq $process) {
         return $false
     }
-    return Test-ProjectCommandLine `
-        -CommandLine ([string]$process.CommandLine) `
-        -ProjectRoot $ProjectRoot `
-        -CommandMarker $CommandMarker
+    $commandLine = [string]$process.CommandLine
+    return (
+        (Test-ProjectCommandLine `
+            -CommandLine $commandLine `
+            -ProjectRoot $ProjectRoot `
+            -CommandMarker $CommandMarker) -and
+        (Test-ProjectLaunchArguments `
+            -CommandLine $commandLine `
+            -ExpectedArgumentList $ExpectedArgumentList `
+            -ExpectedPort $ExpectedPort)
+    )
 }
 
 function Stop-ProjectProcess {
@@ -316,11 +444,37 @@ function Stop-ProjectProcess {
         Remove-Item -LiteralPath $StatePath -Force
         return $false
     }
+    try {
+        $null = $process.Handle
+    }
+    catch {
+        throw (
+            "Unable to acquire PID {0} safely; refusing to stop it." -f
+            $state.pid
+        )
+    }
 
+    $argumentsProperty = $state.PSObject.Properties['argument_list']
+    $portProperty = $state.PSObject.Properties['port']
+    $savedArgumentList = if ($null -eq $argumentsProperty) {
+        ''
+    }
+    else {
+        [string]$argumentsProperty.Value
+    }
+    $savedPort = 0
+    if ($null -ne $portProperty) {
+        [int]::TryParse(
+            [string]$portProperty.Value,
+            [ref]$savedPort
+        ) | Out-Null
+    }
     $owned = Test-ProjectProcess `
         -Id ([int]$state.pid) `
         -ProjectRoot ([string]$state.project_root) `
-        -CommandMarker ([string]$state.command_marker)
+        -CommandMarker ([string]$state.command_marker) `
+        -ExpectedArgumentList $savedArgumentList `
+        -ExpectedPort $savedPort
     if (-not $owned) {
         throw (
             "PID {0} does not belong to this project; refusing to stop it." -f
@@ -328,7 +482,7 @@ function Stop-ProjectProcess {
         )
     }
 
-    Stop-Process -Id ([int]$state.pid) -Force
+    Stop-Process -InputObject $process -Force
     $process.WaitForExit(5000) | Out-Null
     Remove-Item -LiteralPath $StatePath -Force
     return $true

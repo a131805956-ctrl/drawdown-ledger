@@ -195,6 +195,78 @@ function ConvertTo-FunnelTargetIdentity {
     return ($Target -replace '^[A-Za-z+]+://', '').TrimEnd('/')
 }
 
+function Assert-SafePreviousFunnelRoute {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Route,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedPublicPath,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ExpectedHttpsPort
+    )
+
+    $errorMessage = (
+        'Invalid Funnel previous route snapshot; refusing to mutate Funnel.'
+    )
+    $path = [string](Get-FunnelRouteProperty -Route $Route -Name 'path')
+    if (
+        $ExpectedPublicPath -ne '/drawdown-ledger' -or
+        $path -ne $ExpectedPublicPath
+    ) {
+        throw $errorMessage
+    }
+
+    $httpsPort = 0
+    $httpsPortValue = Get-FunnelRouteProperty `
+        -Route $Route `
+        -Name 'https_port'
+    if (
+        -not [int]::TryParse([string]$httpsPortValue, [ref]$httpsPort) -or
+        $httpsPort -ne 443 -or
+        $httpsPort -ne $ExpectedHttpsPort
+    ) {
+        throw $errorMessage
+    }
+
+    $proxy = [string](Get-FunnelRouteProperty -Route $Route -Name 'proxy')
+    $target = [string](Get-FunnelRouteProperty -Route $Route -Name 'target')
+    if (
+        $proxy -notmatch
+            '(?i)^http://127\.0\.0\.1:(?<port>[0-9]{1,5})/?$'
+    ) {
+        throw $errorMessage
+    }
+    $proxyPort = 0
+    if (
+        -not [int]::TryParse($Matches.port, [ref]$proxyPort) -or
+        $proxyPort -lt 1 -or
+        $proxyPort -gt 65535
+    ) {
+        throw $errorMessage
+    }
+
+    $proxyIdentity = ConvertTo-FunnelTargetIdentity -Target $proxy
+    $targetIdentity = ConvertTo-FunnelTargetIdentity -Target $target
+    if (
+        $target -notmatch '^127\.0\.0\.1:[0-9]{1,5}$' -or
+        -not $targetIdentity.Equals(
+            $proxyIdentity,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+    ) {
+        throw $errorMessage
+    }
+
+    return [pscustomobject]@{
+        Path = $path
+        HttpsPort = $httpsPort
+        Target = $proxy
+    }
+}
+
 function Find-FunnelRoute {
     [CmdletBinding()]
     param(
@@ -461,8 +533,11 @@ function Restore-DrawdownFunnel {
     if ($ExpectedPublicPath.Length -gt 1) {
         $ExpectedPublicPath = $ExpectedPublicPath.TrimEnd('/')
     }
+    $projectPublicPath = '/drawdown-ledger'
     $expectedIdentity = ConvertTo-FunnelTargetIdentity -Target $ExpectedTarget
     if (
+        $ExpectedPublicPath -ne $projectPublicPath -or
+        $publicPath -ne $projectPublicPath -or
         $publicPath -ne $ExpectedPublicPath -or
         $replacementIdentity -ne $expectedIdentity
     ) {
@@ -472,8 +547,15 @@ function Restore-DrawdownFunnel {
         )
     }
     $httpsPort = [int]$saved.https_port
-    if ($httpsPort -le 0) {
+    if ($httpsPort -ne 443) {
         throw "Invalid Funnel state snapshot: $StatePath"
+    }
+    $validatedPreviousRoute = $null
+    if ($null -ne $saved.previous_route) {
+        $validatedPreviousRoute = Assert-SafePreviousFunnelRoute `
+            -Route $saved.previous_route `
+            -ExpectedPublicPath $publicPath `
+            -ExpectedHttpsPort $httpsPort
     }
 
     $status = Get-FunnelStatus
@@ -502,18 +584,10 @@ function Restore-DrawdownFunnel {
         Remove-FunnelTarget -PublicPath $publicPath -HttpsPort $httpsPort
     }
     else {
-        $previousTarget = if (
-            [string]::IsNullOrWhiteSpace([string]$saved.previous_route.proxy)
-        ) {
-            [string]$saved.previous_route.target
-        }
-        else {
-            [string]$saved.previous_route.proxy
-        }
         Set-FunnelTarget `
-            -Target $previousTarget `
-            -PublicPath ([string]$saved.previous_route.path) `
-            -HttpsPort ([int]$saved.previous_route.https_port)
+            -Target $validatedPreviousRoute.Target `
+            -PublicPath $validatedPreviousRoute.Path `
+            -HttpsPort $validatedPreviousRoute.HttpsPort
     }
     Remove-Item -LiteralPath $StatePath -Force
     return $true
