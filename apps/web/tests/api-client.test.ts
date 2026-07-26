@@ -30,6 +30,35 @@ describe("research API clients", () => {
         );
     });
 
+    it("keeps configured API requests inside a nested public mount", async () => {
+        const fetcher = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    schema_version: "1.0",
+                    instrument_count: 0,
+                    cached_symbols: [],
+                    formal_result_count: 0,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        );
+
+        await createLiveResearchApi({
+            fetcher,
+            baseUrl: "/drawdown-ledger/api/v1",
+        }).getMarketOverview();
+
+        expect(fetcher).toHaveBeenCalledWith(
+            "/drawdown-ledger/api/v1/market/overview",
+            expect.objectContaining({
+                headers: { Accept: "application/json" },
+            }),
+        );
+    });
+
     it("encodes market-series queries and JSON research requests", async () => {
         const fetcher = vi
             .fn()

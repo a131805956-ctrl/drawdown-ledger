@@ -31,8 +31,9 @@ import type {
     StrategyBacktestRequest,
     StrategyBacktestResponse,
 } from "./contracts";
+import { apiVersionPath } from "./deploymentPath";
 
-const API_VERSION_PATH = "/api/v1";
+const API_VERSION_PATH = apiVersionPath(import.meta.env.BASE_URL);
 
 export interface ResearchApi {
     getInstruments(this: void): Promise<InstrumentListResponse>;
