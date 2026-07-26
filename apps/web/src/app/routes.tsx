@@ -9,6 +9,7 @@ import { AiBatchPage } from "../pages/AiBatchPage";
 import { DataHealthPage } from "../pages/DataHealthPage";
 import { EvidencePage } from "../pages/EvidencePage";
 import { MarketOverviewPage } from "../pages/MarketOverviewPage";
+import { ReportsPage } from "../pages/ReportsPage";
 import { StrategyPage } from "../pages/StrategyPage";
 
 interface PlaceholderPageProps {
@@ -72,13 +73,7 @@ export function AppRoutes() {
                 />
                 <Route
                     path="reports"
-                    element={
-                        <PlaceholderPage
-                            title="報告與比較"
-                            eyebrow="Research ledger"
-                            message="完成研究後，可在這裡並排比較與匯出可追溯結果。"
-                        />
-                    }
+                    element={<ReportsPage />}
                 />
                 <Route
                     path="data-health"
