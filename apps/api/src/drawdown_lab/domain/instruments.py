@@ -92,13 +92,13 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
         benchmark_symbol="^NDX",
         instruments=(
             _instrument(
-                "QQQ", "Invesco QQQ Trust", "nasdaq-100", 1, "QQQ", "USD", "America/New_York"
+                "QQQ", "Invesco QQQ Trust", "nasdaq-100", 1, "^NDX", "USD", "America/New_York"
             ),
             _instrument(
-                "QLD", "ProShares Ultra QQQ", "nasdaq-100", 2, "QQQ", "USD", "America/New_York"
+                "QLD", "ProShares Ultra QQQ", "nasdaq-100", 2, "^NDX", "USD", "America/New_York"
             ),
             _instrument(
-                "TQQQ", "ProShares UltraPro QQQ", "nasdaq-100", 3, "QQQ", "USD", "America/New_York"
+                "TQQQ", "ProShares UltraPro QQQ", "nasdaq-100", 3, "^NDX", "USD", "America/New_York"
             ),
         ),
     ),
@@ -108,13 +108,13 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
         benchmark_symbol="^GSPC",
         instruments=(
             _instrument(
-                "SPY", "SPDR S&P 500 ETF Trust", "sp-500", 1, "SPY", "USD", "America/New_York"
+                "SPY", "SPDR S&P 500 ETF Trust", "sp-500", 1, "^GSPC", "USD", "America/New_York"
             ),
             _instrument(
-                "SSO", "ProShares Ultra S&P500", "sp-500", 2, "SPY", "USD", "America/New_York"
+                "SSO", "ProShares Ultra S&P500", "sp-500", 2, "^GSPC", "USD", "America/New_York"
             ),
             _instrument(
-                "UPRO", "ProShares UltraPro S&P500", "sp-500", 3, "SPY", "USD", "America/New_York"
+                "UPRO", "ProShares UltraPro S&P500", "sp-500", 3, "^GSPC", "USD", "America/New_York"
             ),
         ),
     ),
@@ -128,7 +128,7 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
                 "SPDR Dow Jones Industrial Average ETF Trust",
                 "dow-jones-industrial-average",
                 1,
-                "DIA",
+                "^DJI",
                 "USD",
                 "America/New_York",
             ),
@@ -137,7 +137,7 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
                 "ProShares Ultra Dow30",
                 "dow-jones-industrial-average",
                 2,
-                "DIA",
+                "^DJI",
                 "USD",
                 "America/New_York",
             ),
@@ -146,7 +146,7 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
                 "ProShares UltraPro Dow30",
                 "dow-jones-industrial-average",
                 3,
-                "DIA",
+                "^DJI",
                 "USD",
                 "America/New_York",
             ),
@@ -162,7 +162,7 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
                 "iShares Russell 2000 ETF",
                 "russell-2000",
                 1,
-                "IWM",
+                "^RUT",
                 "USD",
                 "America/New_York",
             ),
@@ -171,7 +171,7 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
                 "ProShares Ultra Russell2000",
                 "russell-2000",
                 2,
-                "IWM",
+                "^RUT",
                 "USD",
                 "America/New_York",
             ),
@@ -180,7 +180,7 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
                 "ProShares UltraPro Russell2000",
                 "russell-2000",
                 3,
-                "IWM",
+                "^RUT",
                 "USD",
                 "America/New_York",
             ),
@@ -203,10 +203,9 @@ def market_symbol_roles() -> dict[str, tuple[MarketSymbolRole, ...]]:
         primary_roles = roles_by_symbol.setdefault(family.benchmark_symbol, [])
         if "prototype" not in primary_roles:
             primary_roles.append("prototype")
-        for instrument in family.instruments:
-            if instrument.prototype_symbol == family.benchmark_symbol:
-                continue
-            proxy_roles = roles_by_symbol.setdefault(instrument.prototype_symbol, [])
+        proxy_symbol = prototype_proxy_symbol(family)
+        if proxy_symbol != family.benchmark_symbol:
+            proxy_roles = roles_by_symbol.setdefault(proxy_symbol, [])
             if "prototype_proxy" not in proxy_roles:
                 proxy_roles.append("prototype_proxy")
     return {
@@ -217,6 +216,16 @@ def market_symbol_roles() -> dict[str, tuple[MarketSymbolRole, ...]]:
 
 def required_market_symbols() -> tuple[str, ...]:
     return tuple(market_symbol_roles())
+
+
+def prototype_proxy_symbol(family: InstrumentFamily) -> str:
+    proxy = next(
+        (instrument for instrument in family.instruments if instrument.leverage == 1),
+        None,
+    )
+    if proxy is None:
+        raise ValueError(f"Family {family.id} has no one-times prototype proxy")
+    return proxy.symbol
 
 
 class InstrumentFamilyNotFoundError(LookupError):

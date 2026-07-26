@@ -59,7 +59,8 @@ def test_hidden_prototype_is_healthy_but_not_user_selectable(tmp_path: Path) -> 
         instruments = client.get("/api/v1/instruments").json()["instruments"]
         coverage = client.get("/api/v1/data/health").json()["coverage"]
 
-    instrument_symbols = {row["symbol"] for row in instruments}
+    instruments_by_symbol = {row["symbol"]: row for row in instruments}
+    instrument_symbols = set(instruments_by_symbol)
     coverage_by_symbol = {row["symbol"]: row for row in coverage}
     assert len(instrument_symbols) == 16
     assert "^TWII" not in instrument_symbols
@@ -69,6 +70,11 @@ def test_hidden_prototype_is_healthy_but_not_user_selectable(tmp_path: Path) -> 
         "tradable",
         "prototype_proxy",
     ]
+    assert coverage_by_symbol["006204.TW"]["roles"] == [
+        "tradable",
+        "prototype_proxy",
+    ]
+    assert instruments_by_symbol["TQQQ"]["prototype_symbol"] == "^NDX"
 
 
 def test_unconfigured_data_update_is_typed_and_never_calls_yahoo(tmp_path: Path) -> None:

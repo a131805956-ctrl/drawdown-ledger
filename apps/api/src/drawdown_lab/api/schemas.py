@@ -108,6 +108,7 @@ class ChartSeriesResponse(ApiModel):
 class MarketSeriesResponse(VersionedModel):
     family_id: str
     prototype_symbol: str
+    prototype_source: Literal["benchmark", "proxy"]
     target_symbol: str
     source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
     handoff_session: date | None
@@ -179,6 +180,7 @@ class EpisodeTraceResponse(ApiModel):
 class EvidenceAnalyzeResponse(VersionedModel):
     family_id: str
     prototype_symbol: str
+    prototype_source: Literal["benchmark", "proxy"]
     target_symbol: str
     source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
     source_kind: Literal["actual"] = "actual"
@@ -295,6 +297,7 @@ class PortfolioPointResponse(ApiModel):
 class StrategyBacktestResponse(VersionedModel):
     family_id: str
     prototype_symbol: str
+    prototype_source: Literal["benchmark", "proxy"]
     target_symbol: str
     source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
     source_kind: Literal["actual"] = "actual"
