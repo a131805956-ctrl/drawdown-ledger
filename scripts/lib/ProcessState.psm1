@@ -43,6 +43,96 @@ function Normalize-ProjectCommandLine {
     return [regex]::Replace($CommandLine.Trim(), '\s+', ' ')
 }
 
+function Resolve-ProjectExecutablePath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($FilePath)) {
+        throw 'The process executable path cannot be empty.'
+    }
+    $candidate = $FilePath
+    if (-not [IO.Path]::IsPathRooted($candidate)) {
+        $command = Get-Command `
+            -Name $candidate `
+            -CommandType Application `
+            -ErrorAction Stop |
+            Select-Object -First 1
+        $candidate = [string]$command.Source
+    }
+    $item = Get-Item -LiteralPath $candidate -ErrorAction Stop
+    if ($item.PSIsContainer) {
+        throw "The process executable is not a file: $FilePath"
+    }
+    return [IO.Path]::GetFullPath($item.FullName)
+}
+
+function ConvertTo-ProcessStartTimeUtc {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProcessStartTimeUtc
+    )
+
+    $parsed = [datetime]::MinValue
+    $valid = [datetime]::TryParse(
+        $ProcessStartTimeUtc,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind,
+        [ref]$parsed
+    )
+    if (-not $valid) {
+        throw 'The process creation identity is not a valid timestamp.'
+    }
+    return $parsed.ToUniversalTime().ToString('o')
+}
+
+function Get-ProjectProcessIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Id
+    )
+
+    try {
+        $managedProcess = Get-Process -Id $Id -ErrorAction Stop
+        $null = $managedProcess.Handle
+        $managedProcess.Refresh()
+        $process = Get-CimInstance `
+            -ClassName Win32_Process `
+            -Filter ("ProcessId = {0}" -f $Id) `
+            -ErrorAction Stop
+    }
+    catch {
+        return $null
+    }
+    if (
+        $null -eq $process -or
+        [string]::IsNullOrWhiteSpace([string]$process.ExecutablePath)
+    ) {
+        return $null
+    }
+    try {
+        $executablePath = [IO.Path]::GetFullPath(
+            [string]$process.ExecutablePath
+        )
+        $processStartTimeUtc = $managedProcess.
+            StartTime.
+            ToUniversalTime().
+            ToString('o')
+    }
+    catch {
+        return $null
+    }
+    return [pscustomobject]@{
+        ExecutablePath = $executablePath
+        ProcessStartTimeUtc = $processStartTimeUtc
+        CommandLine = [string]$process.CommandLine
+    }
+}
+
 function Test-ProjectLaunchArguments {
     [CmdletBinding()]
     param(
@@ -121,7 +211,7 @@ function Get-ProcessState {
         return $null
     }
     $state = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($state.schema_version -notin @(1, 2)) {
+    if ($state.schema_version -notin @(1, 2, 3)) {
         throw "Unsupported process state schema in '$StatePath'."
     }
     return $state
@@ -172,8 +262,36 @@ function Save-ProcessState {
         [string]$ArgumentList = '',
 
         [ValidateRange(0, 65535)]
-        [int]$Port = 0
+        [int]$Port = 0,
+
+        [string]$ExecutablePath = '',
+
+        [string]$ProcessStartTimeUtc = ''
     )
+
+    $hasExecutablePath = -not [string]::IsNullOrWhiteSpace($ExecutablePath)
+    $hasStartTime = -not [string]::IsNullOrWhiteSpace($ProcessStartTimeUtc)
+    if ($hasExecutablePath -xor $hasStartTime) {
+        throw (
+            'ExecutablePath and ProcessStartTimeUtc must either both be supplied ' +
+            'or both be omitted.'
+        )
+    }
+    if (-not $hasExecutablePath) {
+        $identity = Get-ProjectProcessIdentity -Id $Id
+        if ($null -ne $identity) {
+            $ExecutablePath = $identity.ExecutablePath
+            $ProcessStartTimeUtc = $identity.ProcessStartTimeUtc
+        }
+        elseif ($null -ne (Get-Process -Id $Id -ErrorAction SilentlyContinue)) {
+            throw "Unable to read the creation identity for live PID $Id."
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExecutablePath)) {
+        $ExecutablePath = Resolve-ProjectExecutablePath -FilePath $ExecutablePath
+        $ProcessStartTimeUtc = ConvertTo-ProcessStartTimeUtc `
+            -ProcessStartTimeUtc $ProcessStartTimeUtc
+    }
 
     $directory = Split-Path -Parent $StatePath
     if (-not (Test-Path -LiteralPath $directory)) {
@@ -184,13 +302,15 @@ function Save-ProcessState {
     )
     try {
         $state = [ordered]@{
-            schema_version = 2
+            schema_version = 3
             pid = $Id
             project_root = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
             command_marker = $CommandMarker
             service_name = $ServiceName
             argument_list = $ArgumentList
             port = $Port
+            executable_path = $ExecutablePath
+            process_start_time_utc = $ProcessStartTimeUtc
             created_at = [DateTimeOffset]::UtcNow.ToString('o')
         }
         [IO.File]::WriteAllText(
@@ -264,6 +384,7 @@ function Start-ProjectProcess {
         [int]$Port
     )
 
+    $canonicalFilePath = Resolve-ProjectExecutablePath -FilePath $FilePath
     $state = Get-ProcessState -StatePath $StatePath
     if ($null -ne $state) {
         if (-not (Test-ProcessStateOwnership `
@@ -287,6 +408,20 @@ function Start-ProjectProcess {
                 [string]$portProperty.Value,
                 [ref]$savedPort
             ) | Out-Null
+        }
+        $executableProperty = $state.PSObject.Properties['executable_path']
+        $startTimeProperty = $state.PSObject.Properties['process_start_time_utc']
+        $savedExecutablePath = if ($null -eq $executableProperty) {
+            ''
+        }
+        else {
+            [string]$executableProperty.Value
+        }
+        $savedProcessStartTimeUtc = if ($null -eq $startTimeProperty) {
+            ''
+        }
+        else {
+            [string]$startTimeProperty.Value
         }
         $recordedProcess = Get-Process `
             -Id ([int]$state.pid) `
@@ -312,7 +447,9 @@ function Start-ProjectProcess {
             -ProjectRoot ([string]$state.project_root) `
             -CommandMarker ([string]$state.command_marker) `
             -ExpectedArgumentList $savedArgumentList `
-            -ExpectedPort $savedPort)
+            -ExpectedPort $savedPort `
+            -ExpectedExecutablePath $savedExecutablePath `
+            -ExpectedProcessStartTimeUtc $savedProcessStartTimeUtc)
         ) {
             if (-not (Test-ProcessStateLaunchConfiguration `
                 -State $state `
@@ -323,6 +460,18 @@ function Start-ProjectProcess {
                     'A project-owned process is already running with a different ' +
                     'launch configuration. Stop it explicitly before changing ports ' +
                     'or startup arguments.'
+                )
+            }
+            if (
+                [string]::IsNullOrWhiteSpace($savedExecutablePath) -or
+                -not ([IO.Path]::GetFullPath($savedExecutablePath)).Equals(
+                    $canonicalFilePath,
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            ) {
+                throw (
+                    'A project-owned process is already running with a different ' +
+                    'executable. Stop it explicitly before changing executables.'
                 )
             }
             return $recordedProcess
@@ -337,7 +486,7 @@ function Start-ProjectProcess {
     }
 
     $process = Start-Process `
-        -FilePath $FilePath `
+        -FilePath $canonicalFilePath `
         -ArgumentList $ArgumentList `
         -WorkingDirectory $WorkingDirectory `
         -WindowStyle Hidden `
@@ -347,12 +496,19 @@ function Start-ProjectProcess {
     if ($process.HasExited) {
         throw "$ServiceName exited during startup with code $($process.ExitCode)."
     }
+    $startedIdentity = Get-ProjectProcessIdentity -Id $process.Id
+    if ($null -eq $startedIdentity) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        throw "Started $ServiceName process has no verifiable creation identity."
+    }
     if (-not (Test-ProjectProcess `
         -Id $process.Id `
         -ProjectRoot $ProjectRoot `
         -CommandMarker $CommandMarker `
         -ExpectedArgumentList $ArgumentList `
-        -ExpectedPort $Port
+        -ExpectedPort $Port `
+        -ExpectedExecutablePath $canonicalFilePath `
+        -ExpectedProcessStartTimeUtc $startedIdentity.ProcessStartTimeUtc
     )) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         throw "Started $ServiceName process failed project ownership validation."
@@ -365,7 +521,9 @@ function Start-ProjectProcess {
         -CommandMarker $CommandMarker `
         -ServiceName $ServiceName `
         -ArgumentList $ArgumentList `
-        -Port $Port
+        -Port $Port `
+        -ExecutablePath $startedIdentity.ExecutablePath `
+        -ProcessStartTimeUtc $startedIdentity.ProcessStartTimeUtc
     return $process
 }
 
@@ -386,31 +544,60 @@ function Test-ProjectProcess {
         [string]$ExpectedArgumentList,
 
         [Parameter(Mandatory = $true)]
-        [int]$ExpectedPort
+        [int]$ExpectedPort,
+
+        [AllowEmptyString()]
+        [string]$ExpectedExecutablePath = '',
+
+        [AllowEmptyString()]
+        [string]$ExpectedProcessStartTimeUtc = ''
     )
 
+    $identity = Get-ProjectProcessIdentity -Id $Id
+    if ($null -eq $identity) {
+        return $false
+    }
+    $commandLineOwned = (
+        (Test-ProjectCommandLine `
+            -CommandLine $identity.CommandLine `
+            -ProjectRoot $ProjectRoot `
+            -CommandMarker $CommandMarker) -and
+        (Test-ProjectLaunchArguments `
+            -CommandLine $identity.CommandLine `
+            -ExpectedArgumentList $ExpectedArgumentList `
+            -ExpectedPort $ExpectedPort)
+    )
+    if (-not $commandLineOwned) {
+        return $false
+    }
+    $hasExpectedExecutable = -not [string]::IsNullOrWhiteSpace(
+        $ExpectedExecutablePath
+    )
+    $hasExpectedStartTime = -not [string]::IsNullOrWhiteSpace(
+        $ExpectedProcessStartTimeUtc
+    )
+    if (-not $hasExpectedExecutable -or -not $hasExpectedStartTime) {
+        return $false
+    }
     try {
-        $process = Get-CimInstance `
-            -ClassName Win32_Process `
-            -Filter ("ProcessId = {0}" -f $Id) `
-            -ErrorAction Stop
+        $expectedExecutable = [IO.Path]::GetFullPath(
+            $ExpectedExecutablePath
+        )
+        $expectedStartTime = ConvertTo-ProcessStartTimeUtc `
+            -ProcessStartTimeUtc $ExpectedProcessStartTimeUtc
     }
     catch {
         return $false
     }
-    if ($null -eq $process) {
-        return $false
-    }
-    $commandLine = [string]$process.CommandLine
     return (
-        (Test-ProjectCommandLine `
-            -CommandLine $commandLine `
-            -ProjectRoot $ProjectRoot `
-            -CommandMarker $CommandMarker) -and
-        (Test-ProjectLaunchArguments `
-            -CommandLine $commandLine `
-            -ExpectedArgumentList $ExpectedArgumentList `
-            -ExpectedPort $ExpectedPort)
+        $identity.ExecutablePath.Equals(
+            $expectedExecutable,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -and
+        $identity.ProcessStartTimeUtc.Equals(
+            $expectedStartTime,
+            [StringComparison]::Ordinal
+        )
     )
 }
 
@@ -469,12 +656,28 @@ function Stop-ProjectProcess {
             [ref]$savedPort
         ) | Out-Null
     }
+    $executableProperty = $state.PSObject.Properties['executable_path']
+    $startTimeProperty = $state.PSObject.Properties['process_start_time_utc']
+    $savedExecutablePath = if ($null -eq $executableProperty) {
+        ''
+    }
+    else {
+        [string]$executableProperty.Value
+    }
+    $savedProcessStartTimeUtc = if ($null -eq $startTimeProperty) {
+        ''
+    }
+    else {
+        [string]$startTimeProperty.Value
+    }
     $owned = Test-ProjectProcess `
         -Id ([int]$state.pid) `
         -ProjectRoot ([string]$state.project_root) `
         -CommandMarker ([string]$state.command_marker) `
         -ExpectedArgumentList $savedArgumentList `
-        -ExpectedPort $savedPort
+        -ExpectedPort $savedPort `
+        -ExpectedExecutablePath $savedExecutablePath `
+        -ExpectedProcessStartTimeUtc $savedProcessStartTimeUtc
     if (-not $owned) {
         throw (
             "PID {0} does not belong to this project; refusing to stop it." -f

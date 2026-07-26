@@ -1,6 +1,39 @@
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $ModulePath = Join-Path $ProjectRoot 'scripts\lib\ProcessState.psm1'
 
+function Set-TestProcessIdentity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StatePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExecutablePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ProcessStartTimeUtc
+    )
+
+    $state = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 |
+        ConvertFrom-Json
+    $state |
+        Add-Member `
+            -MemberType NoteProperty `
+            -Name executable_path `
+            -Value $ExecutablePath `
+            -Force
+    $state |
+        Add-Member `
+            -MemberType NoteProperty `
+            -Name process_start_time_utc `
+            -Value $ProcessStartTimeUtc `
+            -Force
+    [IO.File]::WriteAllText(
+        $StatePath,
+        ($state | ConvertTo-Json),
+        (New-Object Text.UTF8Encoding($false))
+    )
+}
+
 Describe 'Process state module contract' {
     It 'exports project-owned process lifecycle commands' {
         Test-Path -LiteralPath $ModulePath | Should Be $true
@@ -98,12 +131,20 @@ Describe 'Project process ownership' {
             -PassThru
         try {
             Start-Sleep -Milliseconds 150
+            $cimProcess = Get-CimInstance `
+                -ClassName Win32_Process `
+                -Filter ("ProcessId = {0}" -f $process.Id) `
+                -ErrorAction Stop
             Test-ProjectProcess `
                 -Id $process.Id `
                 -ProjectRoot $ProjectRoot `
                 -CommandMarker 'drawdown-test-marker' `
                 -ExpectedArgumentList $arguments `
-                -ExpectedPort 8787 |
+                -ExpectedPort 8787 `
+                -ExpectedExecutablePath $cimProcess.ExecutablePath `
+                -ExpectedProcessStartTimeUtc (
+                    $process.StartTime.ToUniversalTime().ToString('o')
+                ) |
                 Should Be $true
         }
         finally {
@@ -118,6 +159,8 @@ Describe 'Process state persistence' {
     It 'round-trips an explicit project process state file' {
         $statePath = Join-Path $TestDrive 'api.json'
         $arguments = '-m uvicorn drawdown_lab.runtime:create_runtime_app --port 8787'
+        $executable = (Get-Command powershell.exe -ErrorAction Stop).Source
+        $startTimeUtc = '2026-07-26T01:23:45.6789012Z'
 
         Save-ProcessState `
             -StatePath $statePath `
@@ -126,16 +169,20 @@ Describe 'Process state persistence' {
             -CommandMarker 'drawdown_lab.runtime:create_runtime_app' `
             -ServiceName 'api' `
             -ArgumentList $arguments `
-            -Port 8787
+            -Port 8787 `
+            -ExecutablePath $executable `
+            -ProcessStartTimeUtc $startTimeUtc
 
         $state = Get-ProcessState -StatePath $statePath
-        $state.schema_version | Should Be 2
+        $state.schema_version | Should Be 3
         $state.pid | Should Be 4242
         $state.project_root | Should Be $ProjectRoot
         $state.command_marker | Should Be 'drawdown_lab.runtime:create_runtime_app'
         $state.service_name | Should Be 'api'
         $state.argument_list | Should Be $arguments
         $state.port | Should Be 8787
+        $state.executable_path | Should Be $executable
+        $state.process_start_time_utc | Should Be $startTimeUtc
     }
 }
 
@@ -339,6 +386,168 @@ Describe 'Safe process stopping' {
             }
         }
     }
+
+    It 'refuses to stop the same arguments under a different executable' {
+        $marker = 'executable-mismatch-stop-marker'
+        $arguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 8787" +
+            '"'
+        )
+        $expectedExecutable = (
+            Get-Command powershell.exe -ErrorAction Stop
+        ).Source
+        $alternateExecutable = (
+            Join-Path $env:WINDIR `
+                'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+        )
+        Test-Path -LiteralPath $alternateExecutable | Should Be $true
+        $process = Start-Process `
+            -FilePath $alternateExecutable `
+            -ArgumentList $arguments `
+            -WindowStyle Hidden `
+            -PassThru
+        $statePath = Join-Path $TestDrive 'executable-mismatch-stop.json'
+        try {
+            Start-Sleep -Milliseconds 150
+            Save-ProcessState `
+                -StatePath $statePath `
+                -Id $process.Id `
+                -ProjectRoot $ProjectRoot `
+                -CommandMarker $marker `
+                -ServiceName 'test' `
+                -ArgumentList $arguments `
+                -Port 8787
+            Set-TestProcessIdentity `
+                -StatePath $statePath `
+                -ExecutablePath $expectedExecutable `
+                -ProcessStartTimeUtc (
+                    $process.StartTime.ToUniversalTime().ToString('o')
+                )
+
+            {
+                Stop-ProjectProcess `
+                    -StatePath $statePath `
+                    -ExpectedProjectRoot $ProjectRoot `
+                    -ExpectedCommandMarker $marker
+            } | Should Throw
+
+            (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) |
+                Should Not BeNullOrEmpty
+            Test-Path -LiteralPath $statePath | Should Be $true
+        }
+        finally {
+            $remaining = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($null -ne $remaining) {
+                Stop-Process -Id $process.Id -Force
+            }
+        }
+    }
+
+    It 'refuses to stop a different creation identity with the same executable and arguments' {
+        $marker = 'creation-mismatch-stop-marker'
+        $arguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 8787" +
+            '"'
+        )
+        $executable = (Get-Command powershell.exe -ErrorAction Stop).Source
+        $process = Start-Process `
+            -FilePath $executable `
+            -ArgumentList $arguments `
+            -WindowStyle Hidden `
+            -PassThru
+        $statePath = Join-Path $TestDrive 'creation-mismatch-stop.json'
+        try {
+            Start-Sleep -Milliseconds 150
+            Save-ProcessState `
+                -StatePath $statePath `
+                -Id $process.Id `
+                -ProjectRoot $ProjectRoot `
+                -CommandMarker $marker `
+                -ServiceName 'test' `
+                -ArgumentList $arguments `
+                -Port 8787
+            Set-TestProcessIdentity `
+                -StatePath $statePath `
+                -ExecutablePath $executable `
+                -ProcessStartTimeUtc (
+                    $process.StartTime.
+                        ToUniversalTime().
+                        AddSeconds(-1).
+                        ToString('o')
+                )
+
+            {
+                Stop-ProjectProcess `
+                    -StatePath $statePath `
+                    -ExpectedProjectRoot $ProjectRoot `
+                    -ExpectedCommandMarker $marker
+            } | Should Throw
+
+            (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) |
+                Should Not BeNullOrEmpty
+            Test-Path -LiteralPath $statePath | Should Be $true
+        }
+        finally {
+            $remaining = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($null -ne $remaining) {
+                Stop-Process -Id $process.Id -Force
+            }
+        }
+    }
+
+    It 'refuses to stop a live process when legacy state has no creation identity' {
+        $marker = 'missing-identity-stop-marker'
+        $arguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 8787" +
+            '"'
+        )
+        $process = Start-Process `
+            -FilePath powershell.exe `
+            -ArgumentList $arguments `
+            -WindowStyle Hidden `
+            -PassThru
+        $statePath = Join-Path $TestDrive 'missing-identity-stop.json'
+        try {
+            Start-Sleep -Milliseconds 150
+            Save-ProcessState `
+                -StatePath $statePath `
+                -Id $process.Id `
+                -ProjectRoot $ProjectRoot `
+                -CommandMarker $marker `
+                -ServiceName 'test' `
+                -ArgumentList $arguments `
+                -Port 8787
+            $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 |
+                ConvertFrom-Json
+            $state.PSObject.Properties.Remove('executable_path')
+            $state.PSObject.Properties.Remove('process_start_time_utc')
+            [IO.File]::WriteAllText(
+                $statePath,
+                ($state | ConvertTo-Json),
+                (New-Object Text.UTF8Encoding($false))
+            )
+
+            {
+                Stop-ProjectProcess `
+                    -StatePath $statePath `
+                    -ExpectedProjectRoot $ProjectRoot `
+                    -ExpectedCommandMarker $marker
+            } | Should Throw
+
+            (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) |
+                Should Not BeNullOrEmpty
+            Test-Path -LiteralPath $statePath | Should Be $true
+        }
+        finally {
+            $remaining = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($null -ne $remaining) {
+                Stop-Process -Id $process.Id -Force
+            }
+        }
+    }
 }
 
 Describe 'Idempotent process startup' {
@@ -493,6 +702,128 @@ Describe 'Idempotent process startup' {
                 Should Not BeNullOrEmpty
             $saved = Get-ProcessState -StatePath $statePath
             $saved.pid | Should Be $process.Id
+        }
+        finally {
+            $remaining = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($null -ne $remaining) {
+                Stop-Process -Id $process.Id -Force
+            }
+        }
+    }
+
+    It 'does not reuse the same arguments under a different executable' {
+        $statePath = Join-Path $TestDrive 'executable-mismatch-start.json'
+        $marker = 'executable-mismatch-start-marker'
+        $arguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 8787" +
+            '"'
+        )
+        $expectedExecutable = (
+            Get-Command powershell.exe -ErrorAction Stop
+        ).Source
+        $alternateExecutable = (
+            Join-Path $env:WINDIR `
+                'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+        )
+        Test-Path -LiteralPath $alternateExecutable | Should Be $true
+        $process = Start-Process `
+            -FilePath $alternateExecutable `
+            -ArgumentList $arguments `
+            -WindowStyle Hidden `
+            -PassThru
+        try {
+            Start-Sleep -Milliseconds 150
+            Save-ProcessState `
+                -StatePath $statePath `
+                -Id $process.Id `
+                -ProjectRoot $ProjectRoot `
+                -CommandMarker $marker `
+                -ServiceName 'test' `
+                -ArgumentList $arguments `
+                -Port 8787
+            Set-TestProcessIdentity `
+                -StatePath $statePath `
+                -ExecutablePath $expectedExecutable `
+                -ProcessStartTimeUtc (
+                    $process.StartTime.ToUniversalTime().ToString('o')
+                )
+
+            {
+                Start-ProjectProcess `
+                    -FilePath $expectedExecutable `
+                    -ArgumentList $arguments `
+                    -WorkingDirectory $ProjectRoot `
+                    -StatePath $statePath `
+                    -ProjectRoot $ProjectRoot `
+                    -CommandMarker $marker `
+                    -ServiceName 'test' `
+                    -Port 8787
+            } | Should Throw
+
+            (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) |
+                Should Not BeNullOrEmpty
+            (Get-ProcessState -StatePath $statePath).pid |
+                Should Be $process.Id
+        }
+        finally {
+            $remaining = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($null -ne $remaining) {
+                Stop-Process -Id $process.Id -Force
+            }
+        }
+    }
+
+    It 'does not reuse a different creation identity with the same executable and arguments' {
+        $statePath = Join-Path $TestDrive 'creation-mismatch-start.json'
+        $marker = 'creation-mismatch-start-marker'
+        $arguments = (
+            '-NoProfile -Command "Start-Sleep -Seconds 30 # ' +
+            "$marker $ProjectRoot --port 8787" +
+            '"'
+        )
+        $executable = (Get-Command powershell.exe -ErrorAction Stop).Source
+        $process = Start-Process `
+            -FilePath $executable `
+            -ArgumentList $arguments `
+            -WindowStyle Hidden `
+            -PassThru
+        try {
+            Start-Sleep -Milliseconds 150
+            Save-ProcessState `
+                -StatePath $statePath `
+                -Id $process.Id `
+                -ProjectRoot $ProjectRoot `
+                -CommandMarker $marker `
+                -ServiceName 'test' `
+                -ArgumentList $arguments `
+                -Port 8787
+            Set-TestProcessIdentity `
+                -StatePath $statePath `
+                -ExecutablePath $executable `
+                -ProcessStartTimeUtc (
+                    $process.StartTime.
+                        ToUniversalTime().
+                        AddSeconds(-1).
+                        ToString('o')
+                )
+
+            {
+                Start-ProjectProcess `
+                    -FilePath $executable `
+                    -ArgumentList $arguments `
+                    -WorkingDirectory $ProjectRoot `
+                    -StatePath $statePath `
+                    -ProjectRoot $ProjectRoot `
+                    -CommandMarker $marker `
+                    -ServiceName 'test' `
+                    -Port 8787
+            } | Should Throw
+
+            (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) |
+                Should Not BeNullOrEmpty
+            (Get-ProcessState -StatePath $statePath).pid |
+                Should Be $process.Id
         }
         finally {
             $remaining = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
