@@ -3,9 +3,9 @@ import "@fontsource-variable/noto-sans-tc";
 import "@fontsource-variable/jetbrains-mono";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./app/App";
+import { BrowserRouter } from "./lib/router";
 import "./styles/tokens.css";
 import "./styles/global.css";
 
@@ -17,7 +17,7 @@ if (root === null) {
 
 createRoot(root).render(
     <StrictMode>
-        <BrowserRouter>
+        <BrowserRouter basename={import.meta.env.BASE_URL}>
             <App />
         </BrowserRouter>
     </StrictMode>,

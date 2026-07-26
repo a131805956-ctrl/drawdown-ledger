@@ -1,4 +1,4 @@
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "../lib/router";
 
 const families = [
     { id: "taiwan-50", label: "台灣 50", ticker: "0050" },

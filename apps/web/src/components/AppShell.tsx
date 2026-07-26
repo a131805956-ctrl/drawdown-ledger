@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet } from "../lib/router";
 
 import { DataStatus } from "./DataStatus";
 import { InstrumentRail } from "./InstrumentRail";
@@ -30,7 +30,13 @@ const destinations = [
 export function AppShell() {
     return (
         <div className="app-shell">
-            <a className="skip-link" href="#main-content">
+            <a
+                className="skip-link"
+                href="#main-content"
+                onClick={() => {
+                    document.getElementById("main-content")?.focus();
+                }}
+            >
                 跳至主要內容
             </a>
             <aside className="sidebar">
@@ -89,7 +95,11 @@ export function AppShell() {
                     <DataStatus />
                 </header>
                 <InstrumentRail />
-                <main id="main-content" className="main-content">
+                <main
+                    id="main-content"
+                    className="main-content"
+                    tabIndex={-1}
+                >
                     <Outlet />
                 </main>
             </div>

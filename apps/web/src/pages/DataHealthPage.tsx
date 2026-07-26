@@ -102,11 +102,10 @@ export function DataHealthPage() {
                             </thead>
                             <tbody>
                                 {rows.map((row) => {
-                                    const current =
+                                    const policyComplete =
                                         row.cached &&
                                         row.policy_cutoff !== null &&
-                                        row.policy_cutoff ===
-                                            row.actual_last_session;
+                                        row.actual_last_session !== null;
                                     return (
                                         <tr key={row.symbol}>
                                             <th scope="row">{row.symbol}</th>
@@ -132,7 +131,7 @@ export function DataHealthPage() {
                                                 />
                                             </td>
                                             <td>
-                                                {current
+                                                {policyComplete
                                                     ? "符合截止政策"
                                                     : "需要檢查"}
                                             </td>

@@ -31,10 +31,9 @@ export interface StaticResearchSnapshot {
     health: DataHealthResponse;
 }
 
-export interface DataCapability {
-    mode: "live" | "static";
-    dataDate?: string;
-}
+export type DataCapability =
+    | { mode: "live" }
+    | { mode: "static"; dataDate: string };
 
 interface LiveResearchApiOptions {
     baseUrl?: string;
@@ -191,5 +190,7 @@ export function capabilityFromEnvironment(): DataCapability {
     if (typeof dataDate === "string" && dataDate.length > 0) {
         return { mode: "static", dataDate };
     }
-    return { mode: "static" };
+    throw new Error(
+        "VITE_STATIC_DATA_DATE is required when VITE_DATA_MODE=static",
+    );
 }

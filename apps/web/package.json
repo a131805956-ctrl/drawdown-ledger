@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "generate:api": "python scripts/generate_openapi_types.py",
+    "check:api": "python scripts/generate_openapi_types.py --check",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest"
@@ -16,8 +18,7 @@
     "@fontsource-variable/sora": "^5.3.0",
     "@tanstack/react-query": "^5.101.4",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "react-router-dom": "7.18.1"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -31,7 +32,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
     "jsdom": "^29.1.1",
-    "typescript": "^6.0.3",
+    "typescript": "6.0.3",
     "typescript-eslint": "^8.65.0",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"

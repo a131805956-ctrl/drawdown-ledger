@@ -1,8 +1,8 @@
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
 import { vi } from "vitest";
 
 import { App } from "../src/app/App";
+import { MemoryRouter } from "../src/lib/router";
 import type {
     DataHealthResponse,
     InstrumentListResponse,
@@ -144,18 +144,45 @@ describe("market overview route", () => {
 
 describe("data health route", () => {
     it("distinguishes the policy cutoff from the observed session", async () => {
-        renderPath("/data-health", apiWith());
+        renderPath(
+            "/data-health",
+            apiWith({
+                health: {
+                    schema_version: "1.0",
+                    status: "healthy",
+                    coverage: [
+                        {
+                            symbol: "QQQ",
+                            cached: true,
+                            actual_last_session: "2026-02-27",
+                            policy_cutoff: "2026-02-28",
+                        },
+                    ],
+                },
+            }),
+        );
 
         expect(
             await screen.findByRole("heading", { name: "資料健康度" }),
         ).toBeVisible();
         expect(screen.getByRole("row", { name: /^QQQ / })).toHaveTextContent(
-            "2026-06-30",
-        );
-        expect(screen.getByRole("row", { name: /^TQQQ / })).toHaveTextContent(
-            "尚未快取",
+            "符合截止政策",
         );
         expect(screen.getByText("政策截止日")).toBeVisible();
         expect(screen.getByText("實際最後交易日")).toBeVisible();
+    });
+
+    it("does not paint a failed live API as healthy", async () => {
+        const api = apiWith();
+        vi.mocked(api.getDataHealth).mockRejectedValue(
+            new Error("service unavailable"),
+        );
+        renderPath("/", api);
+
+        const status = await screen.findByRole("link", {
+            name: "本機資料服務無法連線",
+        });
+        expect(status).toHaveClass("is-error");
+        expect(status).toHaveTextContent("檢查 API 服務");
     });
 });

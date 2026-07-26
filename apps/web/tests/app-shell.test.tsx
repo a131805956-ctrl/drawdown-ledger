@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 
 import { App } from "../src/app/App";
+import { MemoryRouter } from "../src/lib/router";
 
 describe("research application shell", () => {
     it("exposes all six research destinations", () => {
@@ -27,15 +28,39 @@ describe("research application shell", () => {
         }
     });
 
-    it("offers a keyboard bypass to the research content", () => {
+    it("moves keyboard focus into the research content", async () => {
+        const user = userEvent.setup();
         render(
             <MemoryRouter initialEntries={["/evidence"]}>
                 <App />
             </MemoryRouter>,
         );
 
+        const skipLink = screen.getByRole("link", {
+            name: "跳至主要內容",
+        });
+        expect(skipLink).toHaveAttribute("href", "#main-content");
+
+        await user.click(skipLink);
+
+        expect(screen.getByRole("main")).toHaveFocus();
+    });
+
+    it("navigates between workbench routes without a third-party router", async () => {
+        const user = userEvent.setup();
+        render(
+            <MemoryRouter initialEntries={["/"]}>
+                <App />
+            </MemoryRouter>,
+        );
+
+        await user.click(screen.getByRole("link", { name: "歷史證據" }));
+
         expect(
-            screen.getByRole("link", { name: "跳至主要內容" }),
-        ).toHaveAttribute("href", "#main-content");
+            screen.getByRole("heading", { name: "歷史證據" }),
+        ).toBeVisible();
+        expect(
+            screen.getByRole("link", { name: "歷史證據" }),
+        ).toHaveAttribute("aria-current", "page");
     });
 });

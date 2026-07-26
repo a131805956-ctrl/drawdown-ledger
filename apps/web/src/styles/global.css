@@ -285,6 +285,16 @@ h3 {
     color: var(--color-focus);
 }
 
+.data-status.is-pending .data-status__signal {
+    background: transparent;
+    color: var(--color-signal);
+}
+
+.data-status.is-error .data-status__signal {
+    background: var(--color-risk);
+    color: var(--color-risk);
+}
+
 .instrument-rail {
     display: flex;
     min-height: 66px;
