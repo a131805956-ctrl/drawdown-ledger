@@ -38,7 +38,7 @@ jobs:
         run: |
           python -m drawdown_lab.reports.privacy apps/web/public/demo
           if [[ -d reports/published ]]; then
-            python -m drawdown_lab.reports.privacy reports/published
+            python -m drawdown_lab.reports.publication reports/published
           fi
       - name: Build fixed static backup
         env:
@@ -48,8 +48,11 @@ jobs:
       - name: Include privacy-approved published reports
         shell: bash
         run: |
+          mkdir -p apps/web/dist/reports
+          python -m drawdown_lab.reports.publication \
+            reports/published \
+            --output apps/web/dist/reports/index.html
           if [[ -d reports/published ]]; then
-            mkdir -p apps/web/dist/reports
             cp -R reports/published apps/web/dist/reports/published
           fi
           cp apps/web/dist/index.html apps/web/dist/404.html

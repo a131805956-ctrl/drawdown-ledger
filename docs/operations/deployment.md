@@ -75,9 +75,9 @@ tailscale version
 
 `.github/workflows/pages.yml` 只在 `main` 更新或手動觸發時部署。工作流程會：
 
-1. 掃描靜態示例與 `reports/published`
+1. 掃描靜態示例，逐一驗證 `reports/published` 的 canonical bundles
 2. 以 `/drawdown-ledger/` 為基底建置靜態模式
-3. 建立 `404.html`，支援直接開啟深層路徑
+3. 建立公開報告清單與 `404.html`，支援報告入口及直接開啟深層路徑
 4. 上傳 `apps/web/dist`
 5. 部署到 `github-pages` 環境
 
@@ -88,7 +88,8 @@ gh workflow run Pages
 gh run watch
 ```
 
-GitHub Pages 沒有本機 API。它只顯示固定示例與已通過隱私檢查的報告。
+GitHub Pages 沒有本機 API。它只顯示固定示例與已通過隱私檢查的報告；
+報告入口是 `/drawdown-ledger/reports/index.html`。
 
 ## 驗證部署
 

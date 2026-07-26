@@ -57,10 +57,13 @@ $health.coverage | Format-Table
 提交前再次執行：
 
 ```powershell
-python -m drawdown_lab.reports.privacy reports/published
+python -m drawdown_lab.reports.publication reports/published
 ```
 
-請只加入你確認要公開的報告。CI 會再次掃描。
+這個 collection 驗證器會逐一檢查每個 bundle，拒絕根目錄雜檔、
+連結／reparse point、內容雜湊或跨格式語意不一致，以及任何隱私欄位。
+請只加入你確認要公開的報告；CI 會再次驗證並為 Pages 產生
+`reports/index.html` 清單。
 
 ## 執行例行測試
 

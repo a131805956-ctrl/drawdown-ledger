@@ -84,7 +84,10 @@ GitHub Pages 內建的 `2026-07-31` 資料是固定示例，不是即時行情�
 - 私人策略、未發佈報告與 Funnel 狀態
 - `.env`、執行程序狀態與本機備份
 
-`reports/published` 只接受通過隱私掃描與雜湊驗證的 canonical 匯出。持續整合（CI）會再次掃描公開資料。
+`reports/published` 只接受通過隱私、內容雜湊與跨格式語意驗證的
+canonical 匯出。持續整合（CI）會逐一驗證 bundle；Pages 只會將通過者列入
+公開報告清單。外部真實性邊界是受保護的 Git 提交、PR 與版本標籤，
+匯出 bundle 本身不是獨立的密碼學簽章。
 
 ## 開發與驗證
 
