@@ -3,6 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "test:data": "python -m pytest apps/api/tests/data -q"
+    "test:data": "python -m pytest apps/api/tests/data -q",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0"
   }
 }

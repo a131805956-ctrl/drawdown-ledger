@@ -34,8 +34,6 @@ output/
 # Private market and research data
 /data/
 reports/private/
-reports/published/*
-!reports/published/.gitkeep
 *.sqlite
 *.sqlite3
 *.db

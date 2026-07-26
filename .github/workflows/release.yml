@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Validate release version
+        shell: bash
+        run: |
+          project_version=$(python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as source:
+              print(tomllib.load(source)["project"]["version"])
+          PY
+          )
+          test "v${project_version}" = "${GITHUB_REF_NAME}"
+      - name: Build source archive
+        shell: bash
+        run: |
+          mkdir -p release
+          git archive \
+            --format=zip \
+            --prefix="drawdown-ledger-${GITHUB_REF_NAME}/" \
+            --output="release/drawdown-ledger-${GITHUB_REF_NAME}.zip" \
+            "${GITHUB_REF_NAME}"
+          sha256sum release/*.zip > release/SHA256SUMS.txt
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          release/*
+          --verify-tag
+          --generate-notes
+          --title "Drawdown Ledger ${GITHUB_REF_NAME}"
