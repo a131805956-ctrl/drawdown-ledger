@@ -5,6 +5,7 @@ from datetime import date as Date
 from decimal import Decimal
 from enum import StrEnum
 from math import isfinite
+from typing import cast
 
 import pandas as pd
 
@@ -84,6 +85,10 @@ class Trade:
     raw_price: Decimal
     execution_price: Decimal
     fee: Money
+    prototype_drawdown: Decimal | None
+    target_drawdown: Decimal | None
+    post_trade_cash: Money
+    marker_profit_loss: Money
     kind: str = "buy"
 
 
@@ -135,6 +140,8 @@ class StrategyResult:
 class _Order:
     signal_date: Date
     tier: ThresholdTier
+    prototype_drawdown: Decimal
+    target_drawdown: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +205,7 @@ def simulate_strategy(
         )
     cash = config.initial_cash
     shares = config.initial_shares
+    net_contributions = opening_value
     dividend_income = Decimal("0.00")
     contribution_total = Decimal("0.00")
     interest_income = Decimal("0.00")
@@ -225,6 +233,12 @@ def simulate_strategy(
         if config.contributions is not None
         else []
     )
+    target_price_close = traded_data["price_close"].astype(float)
+    target_drawdowns = target_price_close / target_price_close.cummax() - 1.0
+    target_drawdown_by_date = {
+        cast(pd.Timestamp, timestamp).date(): _decimal(value)
+        for timestamp, value in target_drawdowns.items()
+    }
 
     for timestamp in event_dates:
         current_date = timestamp.date()
@@ -256,6 +270,7 @@ def simulate_strategy(
                     cash += contribution
                     contribution_total += contribution
                     external_flow_today += contribution
+                    net_contributions += contribution
                     external_cashflows.append(CashFlow(current_date, -contribution))
                     if config.invest_contributions_immediately:
                         passive_pending.append((current_date, contribution, "dca"))
@@ -309,6 +324,12 @@ def simulate_strategy(
                             raw_price=price,
                             execution_price=execution_price,
                             fee=fee,
+                            prototype_drawdown=None,
+                            target_drawdown=None,
+                            post_trade_cash=quantize_money(cash),
+                            marker_profit_loss=quantize_money(
+                                cash + shares * price - net_contributions
+                            ),
                             kind=kind,
                         )
                     )
@@ -347,6 +368,12 @@ def simulate_strategy(
                             raw_price=price,
                             execution_price=execution_price,
                             fee=fee,
+                            prototype_drawdown=None,
+                            target_drawdown=None,
+                            post_trade_cash=quantize_money(cash),
+                            marker_profit_loss=quantize_money(
+                                cash + shares * price - net_contributions
+                            ),
                             kind="reinvest",
                         )
                     )
@@ -382,6 +409,12 @@ def simulate_strategy(
                             raw_price=price,
                             execution_price=execution_price,
                             fee=fee,
+                            prototype_drawdown=tier_order.prototype_drawdown,
+                            target_drawdown=tier_order.target_drawdown,
+                            post_trade_cash=quantize_money(cash),
+                            marker_profit_loss=quantize_money(
+                                cash + shares * price - net_contributions
+                            ),
                         )
                     )
 
@@ -401,9 +434,17 @@ def simulate_strategy(
                     triggered.clear()
                 else:
                     drawdown = Decimal("1") - close / ath
+                    signed_drawdown = -drawdown
                     for tier in config.tiers:
                         if tier.depth <= drawdown and tier.depth not in triggered:
-                            pending.append(_Order(current_date, tier))
+                            pending.append(
+                                _Order(
+                                    current_date,
+                                    tier,
+                                    signed_drawdown,
+                                    target_drawdown_by_date.get(current_date),
+                                )
+                            )
                             triggered.add(tier.depth)
 
         if timestamp in traded_data.index:

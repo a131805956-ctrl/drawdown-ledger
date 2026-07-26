@@ -53,10 +53,13 @@ def actual_chart_series(
     validate_market_frame(frame)
     data = frame.data.copy()
     price_close = data["price_close"].astype(float)
-    total_return = data["adj_close"].astype(float)
     data["drawdown"] = price_close / price_close.cummax() - 1.0
-    data["normalized_total_return"] = total_return / float(total_return.iloc[0]) * 100.0
-    selected = _selected(data, start, end)
+    selected = _selected(data, start, end).copy()
+    if not selected.empty:
+        total_return = selected["adj_close"].astype(float)
+        selected["normalized_total_return"] = (
+            total_return / float(total_return.iloc[0]) * 100.0
+        )
     return ChartSeries(
         source_kind="actual",
         unit="price",
@@ -95,8 +98,12 @@ def synthetic_chart_series(
     frame = pd.DataFrame(index=values.index)
     frame["close"] = values
     frame["drawdown"] = values / values.cummax() - 1.0
-    frame["normalized_total_return"] = values / float(values.iloc[0]) * 100.0
-    selected = _selected(frame, start, end)
+    selected = _selected(frame, start, end).copy()
+    if not selected.empty:
+        selected_values = selected["close"].astype(float)
+        selected["normalized_total_return"] = (
+            selected_values / float(selected_values.iloc[0]) * 100.0
+        )
     return ChartSeries(
         source_kind="synthetic",
         unit="index",

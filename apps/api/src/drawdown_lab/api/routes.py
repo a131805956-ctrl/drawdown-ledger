@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
+from typing import cast
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, status
 
 from drawdown_lab.analysis.chart_series import (
@@ -59,6 +61,9 @@ from drawdown_lab.storage.jobs import (
     JobService,
     JobStore,
 )
+
+MAX_MARKET_SERIES_RANGE_DAYS = 366 * 50
+MAX_MARKET_SERIES_POINTS = 15_000
 
 
 def create_router(
@@ -162,6 +167,14 @@ def create_router(
             family_id=request.family_id,
             prototype_symbol=target.prototype_symbol,
             target_symbol=target.symbol,
+            prototype_actual_last_session=data_catalog.actual_last_session(
+                target.prototype_symbol
+            ),
+            prototype_policy_cutoff=data_catalog.policy_cutoff(
+                target.prototype_symbol
+            ),
+            target_actual_last_session=data_catalog.actual_last_session(target.symbol),
+            target_policy_cutoff=data_catalog.policy_cutoff(target.symbol),
             n_day=report.n_day,
             n_episode=report.n_episode,
             n_executed_episode=report.n_executed_episode,
@@ -206,6 +219,7 @@ def create_router(
     @router.post("/strategies/backtest", response_model=StrategyBacktestResponse)
     def strategy_backtest(request: StrategyBacktestRequest) -> StrategyBacktestResponse:
         prototype, traded = trusted_frames(request.family_id, request.target_symbol)
+        _, target = resolve_family_instrument(request.family_id, request.target_symbol)
         try:
             result = simulate_strategy(request.to_domain(), prototype, traded)
         except ValueError as error:
@@ -214,6 +228,17 @@ def create_router(
             PerformanceResponse(**asdict(result.metrics)) if result.metrics is not None else None
         )
         return StrategyBacktestResponse(
+            family_id=request.family_id,
+            prototype_symbol=target.prototype_symbol,
+            target_symbol=target.symbol,
+            prototype_actual_last_session=data_catalog.actual_last_session(
+                target.prototype_symbol
+            ),
+            prototype_policy_cutoff=data_catalog.policy_cutoff(
+                target.prototype_symbol
+            ),
+            target_actual_last_session=data_catalog.actual_last_session(target.symbol),
+            target_policy_cutoff=data_catalog.policy_cutoff(target.symbol),
             name=result.name,
             ending_cash=result.ending_cash,
             ending_shares=result.ending_shares,
@@ -299,28 +324,63 @@ def create_router(
         end: date | None = None,
         include_synthetic: bool = False,
         annual_expense_ratio: float = Query(default=0.0, ge=0.0, le=1.0),
+        max_points: int = Query(
+            default=MAX_MARKET_SERIES_POINTS,
+            ge=1,
+            le=MAX_MARKET_SERIES_POINTS,
+        ),
     ) -> MarketSeriesResponse:
         if start is not None and end is not None and end < start:
             raise HTTPException(status_code=422, detail="End date cannot precede start date")
+        if (
+            start is not None
+            and end is not None
+            and (end - start).days > MAX_MARKET_SERIES_RANGE_DAYS
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Requested market-series date range exceeds "
+                    f"{MAX_MARKET_SERIES_RANGE_DAYS} days"
+                ),
+            )
         prototype, traded = trusted_frames(family_id, target_symbol)
         _, target = resolve_family_instrument(family_id, target_symbol)
+        handoff_session = cast(pd.Timestamp, traded.data.index[0]).date()
         prototype_series = actual_chart_series(prototype, start=start, end=end)
         actual_series = actual_chart_series(traded, start=start, end=end)
+        synthetic_end = handoff_session - timedelta(days=1)
+        if end is not None:
+            synthetic_end = min(synthetic_end, end)
         stress_series = (
             synthetic_chart_series(
                 prototype,
                 float(target.leverage),
                 annual_expense_ratio=annual_expense_ratio,
                 start=start,
-                end=end,
+                end=synthetic_end,
             )
             if include_synthetic and target.leverage > 1
             else None
         )
+        point_counts = (
+            len(prototype_series.points),
+            len(actual_series.points),
+            len(stress_series.points) if stress_series is not None else 0,
+        )
+        if any(count > max_points for count in point_counts):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Selected range exceeds the {max_points} points-per-series limit; "
+                    "narrow the start and end dates"
+                ),
+            )
         return MarketSeriesResponse(
             family_id=family_id,
             prototype_symbol=target.prototype_symbol,
             target_symbol=target.symbol,
+            handoff_session=handoff_session if target.leverage > 1 else None,
             prototype=_chart_response(
                 symbol=target.prototype_symbol,
                 leverage=1.0,

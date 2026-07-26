@@ -26,6 +26,7 @@ SCHEMA_VERSION: Literal["1.0"] = "1.0"
 PositiveRatio = Annotated[Decimal, Field(gt=0, le=1)]
 NonNegativeDecimal = Annotated[Decimal, Field(ge=0)]
 UnitDecimal = Annotated[Decimal, Field(ge=0, le=1)]
+HorizonSessions = Annotated[int, Field(gt=0, le=2520)]
 
 
 class ApiModel(BaseModel):
@@ -108,6 +109,7 @@ class MarketSeriesResponse(VersionedModel):
     prototype_symbol: str
     target_symbol: str
     source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
+    handoff_session: date | None
     prototype: ChartSeriesResponse
     actual: ChartSeriesResponse
     synthetic: ChartSeriesResponse | None
@@ -117,7 +119,11 @@ class EvidenceAnalyzeRequest(VersionedModel):
     family_id: str = Field(min_length=1)
     target_symbol: str = Field(min_length=1)
     threshold: float = Field(gt=0.0, le=1.0)
-    horizons: tuple[int, ...] = (21, 63, 126, 252, 756, 1260)
+    horizons: tuple[HorizonSessions, ...] = Field(
+        default=(21, 63, 126, 252, 756, 1260),
+        min_length=1,
+        max_length=16,
+    )
 
     @model_validator(mode="after")
     def validate_horizons(self) -> Self:
@@ -173,6 +179,12 @@ class EvidenceAnalyzeResponse(VersionedModel):
     family_id: str
     prototype_symbol: str
     target_symbol: str
+    source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
+    source_kind: Literal["actual"] = "actual"
+    prototype_actual_last_session: date | None
+    prototype_policy_cutoff: date | None
+    target_actual_last_session: date | None
+    target_policy_cutoff: date | None
     n_day: int
     n_episode: int
     n_executed_episode: int
@@ -261,7 +273,11 @@ class TradeResponse(ApiModel):
     raw_price: Decimal
     execution_price: Decimal
     fee: Decimal
-    kind: str
+    prototype_drawdown: Decimal | None
+    target_drawdown: Decimal | None
+    post_trade_cash: Decimal
+    marker_profit_loss: Decimal
+    kind: Literal["buy", "reinvest", "dca", "buy-and-hold"]
 
 
 class PortfolioPointResponse(ApiModel):
@@ -276,6 +292,15 @@ class PortfolioPointResponse(ApiModel):
 
 
 class StrategyBacktestResponse(VersionedModel):
+    family_id: str
+    prototype_symbol: str
+    target_symbol: str
+    source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
+    source_kind: Literal["actual"] = "actual"
+    prototype_actual_last_session: date | None
+    prototype_policy_cutoff: date | None
+    target_actual_last_session: date | None
+    target_policy_cutoff: date | None
     name: str
     ending_cash: Decimal
     ending_shares: Decimal
