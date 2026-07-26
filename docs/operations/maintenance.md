@@ -15,6 +15,11 @@ contentType: How-to
 .\scripts\Update-Data.ps1
 ```
 
+Windows 若從含中文的專案路徑啟動，Yahoo 使用的 TLS 憑證會自動複製到
+`%LOCALAPPDATA%\DrawdownLedger\cacert.pem`，避開底層 libcurl 無法讀取非 ASCII
+憑證路徑的限制。這是可重建的公開 CA 憑證快取，不包含市場資料、策略或密碼；
+刪除後會在下次抓取時自動建立。
+
 截止日取前一個日曆月月底。8 月 1 日執行時，政策截止日是 7 月 31 日。非交易日會保留政策截止日，並記錄最後有效交易日。
 
 若要重現指定日期的政策：
