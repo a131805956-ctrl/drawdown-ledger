@@ -36,7 +36,7 @@ export function DataStatus() {
             ? "live"
             : "pending";
     const ariaLabel = isStatic
-        ? "靜態備援，只能檢視；開啟 Live 服務"
+        ? `靜態備援資料狀態，只能檢視；資料日 ${capability.dataDate}；開啟 Live 服務`
         : healthQuery.isError
           ? "本機資料服務無法連線"
           : isNotReady
@@ -57,7 +57,7 @@ export function DataStatus() {
                 </strong>
                 <small>
                     {isStatic
-                        ? "只能檢視 · 開啟 Live"
+                        ? `只能檢視 · 資料日 ${capability.dataDate} · 開啟 Live`
                         : healthQuery.isError
                           ? "檢查 API 服務"
                           : isNotReady

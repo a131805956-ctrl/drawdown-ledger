@@ -406,7 +406,7 @@ describe("data health route", () => {
         );
 
         const liveLink = await screen.findByRole("link", {
-            name: "靜態備援，只能檢視；開啟 Live 服務",
+            name: "靜態備援資料狀態，只能檢視；資料日 2026-07-31；開啟 Live 服務",
         });
         expect(liveLink).toHaveTextContent("只能檢視");
         expect(liveLink).toHaveAttribute(
