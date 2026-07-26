@@ -3,7 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import { App } from "../src/app/App";
-import { createStaticResearchApi } from "../src/lib/api";
+import {
+    createStaticResearchApi,
+    ResearchApiError,
+} from "../src/lib/api";
 import { MemoryRouter } from "../src/lib/router";
 import type {
     EvidenceAnalyzeResponse,
@@ -180,7 +183,7 @@ function researchApi() {
         },
         health: {
             schema_version: "1.0",
-            status: "healthy",
+            status: "incomplete",
             coverage: [],
         },
         evidence,
@@ -229,5 +232,32 @@ describe("historical evidence workbench", () => {
                 threshold: 0.3,
             }),
         );
+    });
+
+    it("shows the API detail when trusted market data is missing", async () => {
+        const user = userEvent.setup();
+        const api = researchApi();
+        api.analyzeEvidence.mockRejectedValue(
+            new ResearchApiError(
+                "Request failed with status 404",
+                404,
+                "Trusted cache is missing prototype series: ^NDX, QQQ",
+            ),
+        );
+        render(
+            <MemoryRouter initialEntries={["/evidence"]}>
+                <App api={api} capability={{ mode: "live" }} />
+            </MemoryRouter>,
+        );
+
+        await user.click(
+            await screen.findByRole("button", { name: "分析歷史回撤" }),
+        );
+
+        expect(
+            await screen.findByText(
+                "Trusted cache is missing prototype series: ^NDX, QQQ",
+            ),
+        ).toBeVisible();
     });
 });

@@ -3,7 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import { App } from "../src/app/App";
-import { createStaticResearchApi } from "../src/lib/api";
+import {
+    createStaticResearchApi,
+    ResearchApiError,
+} from "../src/lib/api";
 import { MemoryRouter } from "../src/lib/router";
 import type {
     MarketSeriesResponse,
@@ -200,7 +203,7 @@ function strategyApi() {
         },
         health: {
             schema_version: "1.0",
-            status: "healthy",
+            status: "incomplete",
             coverage: [],
         },
     });
@@ -268,5 +271,41 @@ describe("cash-pool strategy laboratory", () => {
                 ],
             }),
         );
+    });
+
+    it("shows validation detail returned by the research API", async () => {
+        const user = userEvent.setup();
+        const api = strategyApi();
+        api.backtestStrategy.mockRejectedValue(
+            new ResearchApiError(
+                "Request failed with status 422",
+                422,
+                [
+                    {
+                        type: "date_from_datetime_parsing",
+                        loc: ["body", "contribution_events", 0, "bonus", "month"],
+                        msg: "Input should be a valid date",
+                        input_json: "\"2020-06\"",
+                    },
+                ],
+            ),
+        );
+        render(
+            <MemoryRouter initialEntries={["/strategy"]}>
+                <App api={api} capability={{ mode: "live" }} />
+            </MemoryRouter>,
+        );
+
+        await user.click(
+            await screen.findByRole("button", {
+                name: "執行現金庫回測",
+            }),
+        );
+
+        expect(
+            await screen.findByText(
+                "body.contribution_events.0.bonus.month：Input should be a valid date",
+            ),
+        ).toBeVisible();
     });
 });

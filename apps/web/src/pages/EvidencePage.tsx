@@ -9,7 +9,10 @@ import {
     ResearchChart,
     type ResearchChartModel,
 } from "../features/chart/ResearchChart";
-import { useResearchData } from "../lib/api";
+import {
+    researchApiErrorMessage,
+    useResearchData,
+} from "../lib/api";
 import type {
     EvidenceAnalyzeResponse,
     MarketSeriesResponse,
@@ -300,7 +303,7 @@ export function EvidencePage() {
                     family_id: familyId,
                     target_symbol: targetSymbol,
                     include_synthetic: true,
-                    max_points: 5_000,
+                    max_points: 15_000,
                     start: null,
                     end: null,
                 }),
@@ -419,7 +422,10 @@ export function EvidencePage() {
                 <div className="inline-alert" role="alert">
                     <strong>無法完成分析</strong>
                     <span>
-                        請先更新原型與標的資料，或調整標的後重試。
+                        {researchApiErrorMessage(
+                            analysis.error,
+                            "請先更新原型與標的資料，或調整標的後重試。",
+                        )}
                     </span>
                 </div>
             ) : null}

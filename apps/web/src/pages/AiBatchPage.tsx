@@ -6,7 +6,10 @@ import {
     type FormEvent,
 } from "react";
 
-import { useResearchData } from "../lib/api";
+import {
+    researchApiErrorMessage,
+    useResearchData,
+} from "../lib/api";
 import { priorCalendarMonthEnd } from "../lib/calendar";
 import type {
     OptimizationCreateRequest,
@@ -107,11 +110,11 @@ export function AiBatchPage() {
     const [depths, setDepths] = useState("20, 30, 40");
     const [minimumRatio, setMinimumRatio] = useState("0");
     const [maximumRatio, setMaximumRatio] = useState("100");
-    const [ratioStep, setRatioStep] = useState("10");
+    const [ratioStep, setRatioStep] = useState("50");
     const [monotone, setMonotone] = useState(true);
     const [walkForwardSplits, setWalkForwardSplits] = useState("3");
     const [minimumEpisodes, setMinimumEpisodes] = useState("5");
-    const [maxCandidates, setMaxCandidates] = useState("14641");
+    const [maxCandidates, setMaxCandidates] = useState("100");
     const [syntheticStress, setSyntheticStress] = useState(true);
     const [jobId, setJobId] = useState<string | null>(null);
     const [copyStatus, setCopyStatus] = useState("");
@@ -316,7 +319,7 @@ export function AiBatchPage() {
             setRatioStep(
                 String(
                     (parsed.ratio_search.step_basis_points ??
-                        1_000) / 100,
+                        5_000) / 100,
                 ),
             );
             setMonotone(parsed.ratio_search.monotone ?? true);
@@ -327,7 +330,7 @@ export function AiBatchPage() {
                 String(parsed.minimum_independent_episodes ?? 5),
             );
             setMaxCandidates(
-                String(parsed.max_candidates ?? 14_641),
+                String(parsed.max_candidates ?? 100),
             );
             setSyntheticStress(
                 parsed.synthetic_stress?.enabled ?? false,
@@ -631,6 +634,9 @@ export function AiBatchPage() {
                             納入上市前合成槓桿壓力測試
                         </label>
                     </div>
+                    <p className="optimizer-fast-note">
+                        快速初掃：預設 50% 步長、最多 100 候選；可改 25 或 10 做精細分析。
+                    </p>
                 </section>
 
                 <section className="optimizer-panel">
@@ -802,7 +808,12 @@ export function AiBatchPage() {
                 <div className="inline-alert" role="alert">
                     <strong>最佳化工作失敗</strong>
                     <span>
-                        請縮小比例網格、檢查資料覆蓋或修正設定 JSON。
+                        {researchApiErrorMessage(
+                            createJob.error ??
+                                job.error ??
+                                result.error,
+                            "請縮小比例網格、檢查資料覆蓋或修正設定 JSON。",
+                        )}
                     </span>
                 </div>
             ) : null}

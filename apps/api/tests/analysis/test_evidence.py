@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ from drawdown_lab.analysis.evidence import (
     EvidenceRequest,
     analyze_evidence,
 )
+from drawdown_lab.analysis.forward_returns import first_later_valid_entry
 from drawdown_lab.analysis.risk import block_bootstrap_interval, expected_shortfall_5
 from drawdown_lab.data.models import MarketFrame
 
@@ -162,3 +164,45 @@ def test_fixed_seed_block_bootstrap_is_deterministic() -> None:
     )
 
     assert first == second
+
+
+def test_entry_lookup_does_not_scan_dataframe_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = _market_frame(
+        [100, 100, 100, 100],
+        raw_opens=[100, 0, 90, 80],
+    )
+
+    def fail_iterrows() -> None:
+        raise AssertionError("entry lookup must use the sorted index, not scan every row")
+
+    monkeypatch.setattr(frame.data, "iterrows", fail_iterrows)
+
+    entry = first_later_valid_entry(frame.data, frame.data.index[0].date())
+
+    assert entry is not None
+    assert entry.position == 2
+    assert entry.adjusted_open == Decimal("90")
+
+
+def test_block_bootstrap_requests_random_starts_in_one_batch() -> None:
+    class BatchOnlyRng:
+        def integers(
+            self,
+            low: int,
+            high: int | None = None,
+            size: tuple[int, int] | None = None,
+        ) -> np.ndarray:
+            assert size is not None
+            return np.zeros(size, dtype=np.int64)
+
+    interval = block_bootstrap_interval(
+        [1.0, 2.0, 3.0, 4.0],
+        rng=cast(Any, BatchOnlyRng()),
+        block_size=2,
+        iterations=10,
+    )
+
+    assert interval.lower == pytest.approx(1.5)
+    assert interval.upper == pytest.approx(1.5)

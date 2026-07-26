@@ -41,7 +41,11 @@ export interface components {
         "DataHealthResponse": {
             "coverage": Array<components["schemas"]["DataCoverageResponse"]>;
             "schema_version"?: "1.0";
-            "status": "healthy";
+            "status": "ready" | "incomplete";
+        };
+        "DataUpdateFailureResponse": {
+            "message": string;
+            "symbol": string;
         };
         "DataUpdateRequest": {
             "as_of": string;
@@ -49,11 +53,12 @@ export interface components {
         };
         "DataUpdateResponse": {
             "cutoff": string | null;
+            "failures"?: Array<components["schemas"]["DataUpdateFailureResponse"]>;
             "message"?: string | null;
             "refreshed_symbols": Array<string>;
             "request_count": number;
             "schema_version"?: "1.0";
-            "status": "completed" | "not_configured";
+            "status": "completed" | "partial" | "failed" | "not_configured";
         };
         "EpisodeTraceResponse": {
             "cycle_id": number;

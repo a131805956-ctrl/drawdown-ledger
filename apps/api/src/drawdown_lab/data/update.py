@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
-from typing import cast
+from typing import Literal, cast
 
 import pandas as pd
 
@@ -19,10 +19,18 @@ class DataUpdateError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class UpdateFailure:
+    symbol: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class UpdateSummary:
+    status: Literal["completed", "partial", "failed"]
     cutoff: date
     request_count: int
     refreshed_symbols: tuple[str, ...]
+    failures: tuple[UpdateFailure, ...]
 
 
 class UpdateCoordinator:
@@ -40,15 +48,17 @@ class UpdateCoordinator:
         cutoff = policy_cutoff(as_of)
         requests = 0
         refreshed_symbols: list[str] = []
+        failures: list[UpdateFailure] = []
         symbols = self.symbols if self.symbols is not None else self._approved_symbols()
 
         for symbol in symbols:
-            if self.catalog.is_complete_through(symbol, cutoff):
-                continue
-
-            existing = self.catalog.read(symbol)
-            start = self._refresh_start(existing)
             try:
+                if self.catalog.is_complete_through(symbol, cutoff):
+                    continue
+
+                existing = self.catalog.read(symbol)
+                start = self._refresh_start(existing)
+                requests += 1
                 refreshed = self.provider.fetch(symbol, start, cutoff)
                 validate_market_frame(refreshed)
                 merged = merge_market_frames(existing, refreshed)
@@ -66,14 +76,26 @@ class UpdateCoordinator:
                     completed_cutoff=cutoff,
                     provider=provider_name,
                 )
-            except DataUpdateError:
-                raise
             except Exception as error:
-                raise DataUpdateError(f"Failed to update {symbol}: {error}") from error
-            requests += 1
+                message = str(error).strip() or type(error).__name__
+                failures.append(UpdateFailure(symbol=symbol, message=message))
+                continue
             refreshed_symbols.append(symbol)
 
-        return UpdateSummary(cutoff, requests, tuple(refreshed_symbols))
+        status: Literal["completed", "partial", "failed"]
+        if not failures:
+            status = "completed"
+        elif refreshed_symbols:
+            status = "partial"
+        else:
+            status = "failed"
+        return UpdateSummary(
+            status=status,
+            cutoff=cutoff,
+            request_count=requests,
+            refreshed_symbols=tuple(refreshed_symbols),
+            failures=tuple(failures),
+        )
 
     @staticmethod
     def _refresh_start(existing: MarketFrame | None) -> date:

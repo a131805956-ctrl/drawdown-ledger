@@ -10,7 +10,10 @@ import {
     type ResearchChartModel,
 } from "../features/chart/ResearchChart";
 import type { TradeMarkerInput } from "../features/chart/chartModel";
-import { useResearchData } from "../lib/api";
+import {
+    researchApiErrorMessage,
+    useResearchData,
+} from "../lib/api";
 import type {
     MarketSeriesResponse,
     StrategyBacktestRequest,
@@ -823,7 +826,10 @@ export function StrategyPage() {
                 <div className="inline-alert" role="alert">
                     <strong>回測無法完成</strong>
                     <span>
-                        請檢查日期、資料覆蓋、同月份事件衝突與門檻順序。
+                        {researchApiErrorMessage(
+                            backtest.error,
+                            "請檢查日期、資料覆蓋、同月份事件衝突與門檻順序。",
+                        )}
                     </span>
                 </div>
             ) : null}

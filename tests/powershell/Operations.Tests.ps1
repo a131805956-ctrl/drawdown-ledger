@@ -1114,10 +1114,16 @@ Describe 'Privacy-safe API wrappers' {
         Mock Invoke-RestMethod {
             [pscustomobject]@{
                 schema_version = '1.0'
-                status = 'completed'
+                status = 'partial'
                 cutoff = '2026-06-30'
                 request_count = 2
                 refreshed_symbols = @('QQQ', 'SPY')
+                failures = @(
+                    [pscustomobject]@{
+                        symbol = 'DIA'
+                        message = 'private-provider-detail'
+                    }
+                )
                 message = 'private-provider-detail'
                 secret = 'sk-never-print'
             }
@@ -1127,8 +1133,10 @@ Describe 'Privacy-safe API wrappers' {
             -ApiBaseUrl 'http://127.0.0.1:8787' `
             -AsOf ([datetime]'2026-07-26')
 
-        $summary.Status | Should Be 'completed'
+        $summary.Status | Should Be 'partial'
         $summary.RequestCount | Should Be 2
+        $summary.FailureCount | Should Be 1
+        $summary.FailedSymbols | Should Be @('DIA')
         ($summary | Out-String) | Should Not Match 'private-provider-detail'
         ($summary | Out-String) | Should Not Match 'sk-never-print'
         Assert-MockCalled Invoke-RestMethod 1 -ParameterFilter {
@@ -1230,11 +1238,45 @@ Describe 'Startup data update degradation' {
             } `
             -WarningAction SilentlyContinue
 
-        $result.Status | Should Be 'stale-cache'
+        $result.Status | Should Be 'failed'
         $result.Degraded | Should Be $true
         $result.ExitPolicy | Should Be 'continue-running'
         $result.Message |
             Should Be 'Data update failed; continuing with the existing cache.'
         ($result | Out-String) | Should Not Match 'provider unavailable'
+    }
+
+    It 'marks a typed partial update as degraded while keeping its summary' {
+        $summary = [pscustomobject]@{
+            Status = 'partial'
+            FailureCount = 1
+            FailedSymbols = @('SPY')
+        }
+
+        $result = Invoke-StartupDataUpdate -UpdateAction { $summary }
+
+        $result.Status | Should Be 'partial'
+        $result.Degraded | Should Be $true
+        $result.ExitPolicy | Should Be 'continue-running'
+        $result.Message |
+            Should Be 'Data update partially completed; continuing with available cache.'
+        $result.Summary | Should Be $summary
+    }
+
+    It 'marks a typed failed update as degraded while keeping its summary' {
+        $summary = [pscustomobject]@{
+            Status = 'failed'
+            FailureCount = 21
+            FailedSymbols = @('QQQ')
+        }
+
+        $result = Invoke-StartupDataUpdate -UpdateAction { $summary }
+
+        $result.Status | Should Be 'failed'
+        $result.Degraded | Should Be $true
+        $result.ExitPolicy | Should Be 'continue-running'
+        $result.Message |
+            Should Be 'Data update failed; continuing with the existing cache.'
+        $result.Summary | Should Be $summary
     }
 }

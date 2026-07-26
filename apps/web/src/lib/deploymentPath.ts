@@ -1,4 +1,6 @@
 export const DEFAULT_PUBLIC_BASE_PATH = "/drawdown-ledger/";
+export const LIVE_APPLICATION_URL =
+    "https://desktop-loi23mp.tail9c076e.ts.net/drawdown-ledger/";
 
 function normalisePublicBasePath(value: string): string {
     const trimmed = value.trim();

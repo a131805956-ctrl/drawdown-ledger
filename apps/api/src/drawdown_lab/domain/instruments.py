@@ -77,7 +77,7 @@ INSTRUMENT_FAMILIES: tuple[InstrumentFamily, ...] = (
             ),
             _instrument(
                 "00685L.TW",
-                "Fubon TAIEX Leveraged 2X",
+                "Capital TAIEX Leveraged 2X",
                 "taiwan-weighted",
                 2,
                 "^TWII",

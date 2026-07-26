@@ -113,6 +113,39 @@ describe("research API clients", () => {
         );
     });
 
+    it("posts a market-data update with the requested as-of date", async () => {
+        const fetcher = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    schema_version: "1.0",
+                    status: "completed",
+                    cutoff: "2026-06-30",
+                    request_count: 21,
+                    refreshed_symbols: ["QQQ", "^NDX"],
+                    message: null,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        );
+        const api = createLiveResearchApi({ fetcher });
+
+        await api.updateData("2026-07-26");
+
+        expect(fetcher).toHaveBeenCalledWith(
+            "/api/v1/data/update",
+            expect.objectContaining({
+                method: "POST",
+                body: JSON.stringify({
+                    schema_version: "1.0",
+                    as_of: "2026-07-26",
+                }),
+            }),
+        );
+    });
+
     it("exports a trusted result with explicit report formats", async () => {
         const fetcher = vi.fn().mockResolvedValue(
             new Response(
@@ -162,7 +195,7 @@ describe("research API clients", () => {
             },
             health: {
                 schema_version: "1.0",
-                status: "healthy",
+                status: "incomplete",
                 coverage: [],
             },
         });
@@ -187,7 +220,7 @@ describe("research API clients", () => {
             },
             health: {
                 schema_version: "1.0",
-                status: "healthy",
+                status: "incomplete",
                 coverage: [],
             },
             evidence: {
