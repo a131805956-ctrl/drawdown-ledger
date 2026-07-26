@@ -57,3 +57,40 @@ def test_runtime_serves_built_spa_and_preserves_api_routes(tmp_path: Path) -> No
     assert instruments.json()["schema_version"] == "1.0"
     assert missing_api.status_code == 404
     assert "Drawdown Ledger" not in missing_api.text
+
+
+def test_runtime_accepts_the_owned_public_mount_without_escaping_it(
+    tmp_path: Path,
+) -> None:
+    from drawdown_lab.runtime import create_runtime_app
+
+    dist = tmp_path / "apps" / "web" / "dist"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+    (dist / "index.html").write_text(
+        '<script src="/drawdown-ledger/assets/app.js"></script>'
+        "<h1>Drawdown Ledger</h1>",
+        encoding="utf-8",
+    )
+    (assets / "app.js").write_text("globalThis.mounted = true;", encoding="utf-8")
+    app = create_runtime_app(project_root=tmp_path, provider=NeverFetchProvider())
+
+    with TestClient(app) as client:
+        mounted_root = client.get("/drawdown-ledger/")
+        mounted_route = client.get("/drawdown-ledger/evidence")
+        mounted_asset = client.get("/drawdown-ledger/assets/app.js")
+        mounted_api = client.get("/drawdown-ledger/api/v1/instruments")
+        missing_mounted_api = client.get(
+            "/drawdown-ledger/api/v1/does-not-exist",
+        )
+
+    assert mounted_root.status_code == 200
+    assert mounted_route.status_code == 200
+    assert "Drawdown Ledger" in mounted_route.text
+    assert mounted_asset.status_code == 200
+    assert mounted_asset.text == "globalThis.mounted = true;"
+    assert "javascript" in mounted_asset.headers["content-type"]
+    assert mounted_api.status_code == 200
+    assert mounted_api.json()["schema_version"] == "1.0"
+    assert missing_mounted_api.status_code == 404
+    assert "Drawdown Ledger" not in missing_mounted_api.text
