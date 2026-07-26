@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any
 
+import drawdown_lab.storage.jobs as job_runtime
 import pandas as pd
 import pytest
 from drawdown_lab.api.app import Settings, create_app
@@ -142,6 +144,63 @@ def test_optimizer_provenance_prefers_cached_primary_index(tmp_path: Path) -> No
 
     assert job["status"] == "succeeded"
     assert result["payload"]["provenance"]["prototype_symbol"] == "^NDX"
+
+
+def test_same_prototype_and_target_reuse_one_verified_catalog_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_root = tmp_path / "data"
+    _seed(data_root, include_target=False)
+    payload = _request()
+    payload["target_symbol"] = "QQQ"
+    application = create_app(
+        Settings(
+            database_path=tmp_path / "drawdown.sqlite",
+            data_root=data_root,
+            job_batch_size=1,
+        )
+    )
+    catalog = application.state.data_catalog
+    original_read_verified = catalog.read_verified
+    original_optimize = job_runtime.optimize_market_history
+    verified_reads: list[tuple[str, object, object]] = []
+    optimizer_frames: list[tuple[object, object]] = []
+
+    def tracked_read_verified(symbol: str) -> tuple[object, object]:
+        frame, snapshot = original_read_verified(symbol)
+        verified_reads.append((symbol, frame, snapshot))
+        return frame, snapshot
+
+    def tracked_optimize(
+        request: object,
+        prototype: object,
+        traded: object,
+        **kwargs: Any,
+    ) -> object:
+        optimizer_frames.append((prototype, traded))
+        return original_optimize(request, prototype, traded, **kwargs)
+
+    monkeypatch.setattr(catalog, "read_verified", tracked_read_verified)
+    monkeypatch.setattr(job_runtime, "optimize_market_history", tracked_optimize)
+    with TestClient(application) as client:
+        accepted = client.post("/api/v1/optimizations", json=payload)
+        assert accepted.status_code == 202
+        job = _wait(client, accepted.json()["job_id"])
+        result = client.get(f"/api/v1/results/{job['result_id']}").json()
+        stored = application.state.job_store.get_result(str(job["result_id"]))
+
+    assert job["status"] == "succeeded"
+    assert [symbol for symbol, _, _ in verified_reads] == ["QQQ"]
+    assert len(optimizer_frames) == 1
+    assert optimizer_frames[0][0] is verified_reads[0][1]
+    assert optimizer_frames[0][1] is verified_reads[0][1]
+    assert set(stored.lineage["data_lineage"]) == {"QQQ"}
+    assert (
+        stored.lineage["data_lineage"]["QQQ"]["sha256"]
+        == verified_reads[0][2].sha256
+    )
+    assert result["payload"]["provenance"]["prototype_symbol"] == "QQQ"
 
 
 def test_optimizer_rejects_fabricated_candidate_scores_and_counts(tmp_path: Path) -> None:

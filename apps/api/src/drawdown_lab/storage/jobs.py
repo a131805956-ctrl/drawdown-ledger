@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -102,6 +105,8 @@ class ResultRecord:
     schema_version: str
     payload: object
     raw_json: str
+    lineage: object | None
+    raw_lineage_json: str | None
     created_at: str
 
 
@@ -529,6 +534,7 @@ class JobStore:
         *,
         kind: str,
         payload: dict[str, Any],
+        lineage: Mapping[str, object] | None = None,
         worker_id: str | None = None,
     ) -> JobRecord:
         """Atomically publish a complete result or honor a pending cancellation."""
@@ -536,10 +542,16 @@ class JobStore:
         timestamp = _now()
         result_id = uuid4().hex
         report_id = uuid4().hex
+        raw_payload = deterministic_json(payload)
+        raw_lineage: str | None = None
         with self.database.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT status, cancellation_requested, total FROM jobs WHERE id = ?",
+                """
+                SELECT status, cancellation_requested, total, request_json
+                FROM jobs
+                WHERE id = ?
+                """,
                 (job_id,),
             ).fetchone()
             if row is None:
@@ -566,6 +578,38 @@ class JobStore:
                     f"Cannot complete a {row['status']} job"
                 )
             else:
+                if lineage is not None:
+                    try:
+                        persisted_request = json.loads(str(row["request_json"]))
+                    except json.JSONDecodeError as error:
+                        raise ValueError(
+                            "Persisted job request is invalid JSON"
+                        ) from error
+                    if (
+                        not isinstance(persisted_request, Mapping)
+                        or persisted_request.get("schema_version") != SCHEMA_VERSION
+                        or not isinstance(persisted_request.get("request"), Mapping)
+                    ):
+                        raise ValueError(
+                            "Persisted job request cannot be bound to result lineage"
+                        )
+                    parameters = persisted_request["request"]
+                    raw_parameters = deterministic_json(parameters)
+                    lineage_document = dict(lineage)
+                    lineage_document.update(
+                        {
+                            "generated_at": timestamp,
+                            "parameters": parameters,
+                            "parameters_sha256": hashlib.sha256(
+                                raw_parameters.encode("utf-8")
+                            ).hexdigest(),
+                            "result_sha256": hashlib.sha256(
+                                raw_payload.encode("utf-8")
+                            ).hexdigest(),
+                            "timezone": "UTC",
+                        }
+                    )
+                    raw_lineage = deterministic_json(lineage_document)
                 cursor = connection.execute(
                     """
                     UPDATE jobs
@@ -592,15 +636,17 @@ class JobStore:
                 connection.execute(
                     """
                     INSERT INTO results (
-                        id, job_id, kind, schema_version, payload_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        id, job_id, kind, schema_version, payload_json,
+                        lineage_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         result_id,
                         job_id,
                         kind,
                         SCHEMA_VERSION,
-                        deterministic_json(payload),
+                        raw_payload,
+                        raw_lineage,
                         timestamp,
                     ),
                 )
@@ -734,9 +780,59 @@ class JobStore:
             raise KeyError(report_id)
         return self._report_from_row(row)
 
+    def mark_report_exported(
+        self,
+        result_id: str,
+        *,
+        content: Mapping[str, object],
+    ) -> ReportRecord:
+        """Persist a completed export only after its bundle is ready."""
+
+        raw_content = deterministic_json(content)
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT id, schema_version, export_status, content_json "
+                "FROM reports WHERE result_id = ? ORDER BY id",
+                (result_id,),
+            ).fetchall()
+            if not rows:
+                raise KeyError(result_id)
+            if len(rows) != 1:
+                raise RuntimeError(
+                    "Persisted result must have exactly one corresponding report"
+                )
+            row = rows[0]
+            if str(row["schema_version"]) != SCHEMA_VERSION:
+                raise ValueError("Unsupported persisted report schema version")
+            report_id = str(row["id"])
+            already_persisted = (
+                str(row["export_status"]) == "exported"
+                and str(row["content_json"]) == raw_content
+            )
+            if not already_persisted:
+                cursor = connection.execute(
+                    """
+                    UPDATE reports
+                    SET export_status = 'exported', content_json = ?
+                    WHERE id = ?
+                      AND result_id = ?
+                      AND schema_version = ?
+                    """,
+                    (raw_content, report_id, result_id, SCHEMA_VERSION),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        "Persisted report export transition failed"
+                    )
+        return self.get_report(report_id)
+
     @staticmethod
     def _result_from_row(row: Any) -> ResultRecord:
         raw_json = str(row["payload_json"])
+        raw_lineage_json = (
+            str(row["lineage_json"]) if row["lineage_json"] is not None else None
+        )
         return ResultRecord(
             id=str(row["id"]),
             job_id=str(row["job_id"]),
@@ -744,6 +840,12 @@ class JobStore:
             schema_version=str(row["schema_version"]),
             payload=json.loads(raw_json),
             raw_json=raw_json,
+            lineage=(
+                json.loads(raw_lineage_json)
+                if raw_lineage_json is not None
+                else None
+            ),
+            raw_lineage_json=raw_lineage_json,
             created_at=str(row["created_at"]),
         )
 
@@ -773,13 +875,28 @@ class JobService:
         max_workers: int = 1,
         batch_size: int = 25,
         lease_seconds: float = 60.0,
+        engine_version: str,
+        git_commit: str,
+        code_state: str,
     ) -> None:
         if max_workers <= 0 or batch_size <= 0 or lease_seconds <= 0:
             raise ValueError("Job executor settings must be positive")
+        normalized_engine_version = engine_version.strip()
+        normalized_git_commit = git_commit.strip().lower()
+        normalized_code_state = code_state.strip().lower()
+        if not normalized_engine_version:
+            raise ValueError("engine_version is required")
+        if re.fullmatch(r"[0-9a-f]{7,64}", normalized_git_commit) is None:
+            raise ValueError("git_commit must be a hexadecimal commit identifier")
+        if normalized_code_state not in {"clean", "dirty", "injected"}:
+            raise ValueError("code_state must be clean, dirty, or injected")
         self.store = store
         self.data_catalog = data_catalog
         self.batch_size = batch_size
         self.lease_seconds = lease_seconds
+        self.engine_version = normalized_engine_version
+        self.git_commit = normalized_git_commit
+        self.code_state = normalized_code_state
         self.worker_id = uuid4().hex
         self.executor = ThreadPoolExecutor(
             max_workers=max_workers,
@@ -842,10 +959,16 @@ class JobService:
             if record.status is JobStatus.CANCELLING or record.cancellation_requested:
                 self.store.mark_cancelled(job_id, worker_id=self.worker_id)
                 return
-            prototype = self.data_catalog.read(request.prototype_symbol)
-            traded = self.data_catalog.read(request.target_symbol)
-            if prototype is None or traded is None:
-                raise RuntimeError("Trusted market cache disappeared before evaluation")
+            prototype, prototype_snapshot = self.data_catalog.read_verified(
+                request.prototype_symbol
+            )
+            if request.target_symbol == request.prototype_symbol:
+                traded = prototype
+                target_snapshot = prototype_snapshot
+            else:
+                traded, target_snapshot = self.data_catalog.read_verified(
+                    request.target_symbol
+                )
 
             def on_batch(completed: int, _: int) -> bool:
                 self.store.update_progress(
@@ -863,10 +986,31 @@ class JobService:
                 evaluation_batch_size=self.batch_size,
                 on_batch=on_batch,
             )
+            if result.provenance is None:
+                raise RuntimeError("Optimization result provenance is missing")
+            classification = result.provenance.source_kind
+            data_lineage = {
+                snapshot.symbol: {
+                    "actual_session_cutoff": snapshot.actual_last_session.isoformat(),
+                    "classification": classification,
+                    "fetched_at": snapshot.fetched_at.isoformat(),
+                    "policy_cutoff": snapshot.policy_cutoff.isoformat(),
+                    "provider": snapshot.provider,
+                    "sha256": snapshot.sha256,
+                }
+                for snapshot in (prototype_snapshot, target_snapshot)
+            }
             self.store.complete_with_result(
                 job_id,
                 kind="optimization",
                 payload=asdict(result),
+                lineage={
+                    "code_state": self.code_state,
+                    "data_lineage": data_lineage,
+                    "engine_version": self.engine_version,
+                    "git_commit": self.git_commit,
+                    "schema_version": SCHEMA_VERSION,
+                },
                 worker_id=self.worker_id,
             )
         except OptimizationCancelled:
