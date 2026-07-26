@@ -5,6 +5,7 @@ import {
 } from "../lib/router";
 
 import { AppShell } from "../components/AppShell";
+import { AiBatchPage } from "../pages/AiBatchPage";
 import { DataHealthPage } from "../pages/DataHealthPage";
 import { EvidencePage } from "../pages/EvidencePage";
 import { MarketOverviewPage } from "../pages/MarketOverviewPage";
@@ -67,13 +68,7 @@ export function AppRoutes() {
                 />
                 <Route
                     path="ai"
-                    element={
-                        <PlaceholderPage
-                            title="AI 批次"
-                            eyebrow="Parameter search"
-                            message="下一階段將接入可取消的參數搜尋與三種風險候選。"
-                        />
-                    }
+                    element={<AiBatchPage />}
                 />
                 <Route
                     path="reports"
