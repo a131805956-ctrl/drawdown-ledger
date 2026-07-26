@@ -8,6 +8,7 @@ import { AppShell } from "../components/AppShell";
 import { DataHealthPage } from "../pages/DataHealthPage";
 import { EvidencePage } from "../pages/EvidencePage";
 import { MarketOverviewPage } from "../pages/MarketOverviewPage";
+import { StrategyPage } from "../pages/StrategyPage";
 
 interface PlaceholderPageProps {
     title: string;
@@ -45,6 +46,12 @@ function EvidenceRoute() {
     return <EvidencePage key={family} />;
 }
 
+function StrategyRoute() {
+    const [parameters] = useSearchParams();
+    const family = parameters.get("family") ?? "nasdaq-100";
+    return <StrategyPage key={family} />;
+}
+
 export function AppRoutes() {
     return (
         <Routes>
@@ -56,13 +63,7 @@ export function AppRoutes() {
                 />
                 <Route
                     path="strategy"
-                    element={
-                        <PlaceholderPage
-                            title="策略實驗室"
-                            eyebrow="Cash-pool simulator"
-                            message="下一階段將接入現金庫規則、門檻階梯與基準比較。"
-                        />
-                    }
+                    element={<StrategyRoute />}
                 />
                 <Route
                     path="ai"
