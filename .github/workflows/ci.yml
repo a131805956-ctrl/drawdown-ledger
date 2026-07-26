@@ -117,6 +117,18 @@ jobs:
           if ($result.FailedCount -gt 0) {
             exit 1
           }
+      - name: Run Windows PowerShell 5.1 publication tests
+        shell: powershell
+        run: |
+          if ((Get-Command Invoke-Pester).Parameters.ContainsKey('Path')) {
+            $result = Invoke-Pester -Path '.\scripts\tests\Publish-Report.Tests.ps1' -PassThru
+          }
+          else {
+            $result = Invoke-Pester -Script '.\scripts\tests\Publish-Report.Tests.ps1' -PassThru
+          }
+          if ($result.FailedCount -gt 0) {
+            exit 1
+          }
 
   privacy:
     name: privacy

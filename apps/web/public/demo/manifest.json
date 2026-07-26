@@ -1,0 +1,10 @@
+{
+  "demo_version": "2026-07-31-v1",
+  "evidence_file": "qqq-evidence.json",
+  "evidence_sha256": "cc6a7ece4d8459131099bc98421da63ee44e8031628b8d9e558e0abbf10478bd",
+  "fixed_data_date": "2026-07-31",
+  "live": false,
+  "mode": "static_demo",
+  "notice": "Static fixed-date illustrative fixture. It is not live or current market data.",
+  "schema_version": "1.0"
+}
