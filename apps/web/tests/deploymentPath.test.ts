@@ -22,8 +22,8 @@ describe("deployment paths", () => {
         expect(() => apiVersionPath("/../private/")).toThrow(
             "Invalid public base path",
         );
-        expect(() => apiVersionPath("/drawdown-ledger/?admin=true")).toThrow(
-            "Invalid public base path",
-        );
+        expect(() =>
+            apiVersionPath("/drawdown-ledger/?admin=true"),
+        ).toThrow("Invalid public base path");
     });
 });

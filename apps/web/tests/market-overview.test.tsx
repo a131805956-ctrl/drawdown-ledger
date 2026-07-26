@@ -10,6 +10,7 @@ import type {
 } from "../src/lib/contracts";
 import {
     createStaticResearchApi,
+    type DataCapability,
     type ResearchApi,
 } from "../src/lib/api";
 
@@ -90,10 +91,14 @@ function apiWith(
     };
 }
 
-function renderPath(path: string, api: ResearchApi) {
+function renderPath(
+    path: string,
+    api: ResearchApi,
+    capability: DataCapability = { mode: "live" },
+) {
     return render(
         <MemoryRouter initialEntries={[path]}>
-            <App api={api} capability={{ mode: "live" }} />
+            <App api={api} capability={capability} />
         </MemoryRouter>,
     );
 }
@@ -172,6 +177,7 @@ describe("data health route", () => {
                     ],
                 },
             }),
+            { mode: "static", dataDate: "2026-02-28" },
         );
 
         expect(
@@ -182,6 +188,56 @@ describe("data health route", () => {
         );
         expect(screen.getByText("政策截止日")).toBeVisible();
         expect(screen.getByText("實際最後交易日")).toBeVisible();
+    });
+
+    it("counts only rows matching the required cutoff and labels stale or missing data", async () => {
+        renderPath(
+            "/data-health",
+            apiWith({
+                health: {
+                    schema_version: "1.0",
+                    status: "healthy",
+                    coverage: [
+                        {
+                            symbol: "QQQ",
+                            cached: true,
+                            actual_last_session: "2026-07-31",
+                            policy_cutoff: "2026-07-31",
+                            roles: ["tradable", "prototype_proxy"],
+                        },
+                        {
+                            symbol: "TQQQ",
+                            cached: true,
+                            actual_last_session: "2026-06-30",
+                            policy_cutoff: "2026-06-30",
+                            roles: ["tradable"],
+                        },
+                        {
+                            symbol: "^NDX",
+                            cached: false,
+                            actual_last_session: null,
+                            policy_cutoff: null,
+                            roles: ["prototype"],
+                        },
+                    ],
+                },
+            }),
+            { mode: "static", dataDate: "2026-07-31" },
+        );
+
+        expect(
+            await screen.findByRole("heading", { name: "資料健康度" }),
+        ).toBeVisible();
+        expect(screen.getByText("1 / 3")).toBeVisible();
+        expect(screen.getByRole("row", { name: /^QQQ / })).toHaveTextContent(
+            "符合截止政策",
+        );
+        expect(screen.getByRole("row", { name: /^TQQQ / })).toHaveTextContent(
+            "資料過期",
+        );
+        expect(screen.getByRole("row", { name: /^\^NDX / })).toHaveTextContent(
+            "資料缺漏",
+        );
     });
 
     it("does not paint a failed live API as healthy", async () => {

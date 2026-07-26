@@ -25,3 +25,5 @@ export type ResultListResponse = ApiSchemas["ResultListResponse"];
 export type ResultResponse = ApiSchemas["ResultResponse"];
 export type ReportListResponse = ApiSchemas["ReportListResponse"];
 export type ReportResponse = ApiSchemas["ReportResponse"];
+export type ReportExportRequest = ApiSchemas["ReportExportRequest"];
+export type ReportExportResponse = ApiSchemas["ReportExportResponse"];

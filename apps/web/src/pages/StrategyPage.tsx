@@ -16,6 +16,7 @@ import type {
     StrategyBacktestRequest,
     StrategyBacktestResponse,
 } from "../lib/contracts";
+import { priorCalendarMonthEnd } from "../lib/calendar";
 import { useSearchParams } from "../lib/router";
 
 interface StrategyBundle {
@@ -52,17 +53,6 @@ const familyNames: Record<string, string> = {
     "dow-jones-industrial-average": "道瓊工業",
     "russell-2000": "Russell 2000",
 };
-
-function priorCalendarMonthEnd(reference = new Date()): string {
-    const value = new Date(
-        Date.UTC(
-            reference.getUTCFullYear(),
-            reference.getUTCMonth(),
-            0,
-        ),
-    );
-    return value.toISOString().slice(0, 10);
-}
 
 function decimalPercent(value: string): string {
     return (Number(value) / 100).toFixed(2);

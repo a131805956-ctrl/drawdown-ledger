@@ -51,6 +51,14 @@ export interface ResearchChartModel {
 
 type DateRange = "1y" | "3y" | "5y" | "all";
 type ScaleMode = "linear" | "log";
+type MeasurementSeriesKey = "prototype" | "actual" | "synthetic";
+
+interface MeasurementSeriesOption {
+    key: MeasurementSeriesKey;
+    label: string;
+    points: ChartDatum[];
+    renderedPoints: ChartDatum[];
+}
 
 interface ResearchChartProps {
     model: ResearchChartModel;
@@ -110,18 +118,24 @@ function formatPercent(value: number): string {
 
 function MeasurementReadout({
     measurement,
+    seriesLabel,
 }: {
     measurement: ChartMeasurement | null;
+    seriesLabel: string | null;
 }) {
     if (measurement === null) {
         return (
             <p className="chart-measurement chart-measurement--empty">
-                在圖上依序點兩個日期，可比較價格、總報酬與回撤。
+                可點線圖或使用日期欄位選兩個交易日，比較價格、總報酬與回撤。
             </p>
         );
     }
     return (
-        <dl className="chart-measurement" aria-label="兩點量測結果">
+        <dl
+            className="chart-measurement"
+            role="group"
+            aria-label={`${seriesLabel ?? "所選序列"} 兩點量測結果`}
+        >
             <div>
                 <dt>期間</dt>
                 <dd>
@@ -161,6 +175,8 @@ export function ResearchChart({
     const [showSynthetic, setShowSynthetic] = useState(
         model.synthetic !== undefined && model.synthetic !== null,
     );
+    const [measurementSeries, setMeasurementSeries] =
+        useState<MeasurementSeriesKey>("prototype");
     const [measurementSessions, setMeasurementSessions] = useState<string[]>(
         [],
     );
@@ -196,18 +212,99 @@ export function ResearchChart({
         () => aggregateChartPoints(syntheticPoints, aggregation),
         [aggregation, syntheticPoints],
     );
+    const measurementOptions = useMemo(() => {
+        const options: MeasurementSeriesOption[] = [];
+        if (showPrototype) {
+            options.push({
+                key: "prototype",
+                label: `原型 ${model.prototype.symbol}`,
+                points: prototypePoints,
+                renderedPoints: renderedPrototypePoints,
+            });
+        }
+        if (showActual) {
+            options.push({
+                key: "actual",
+                label: `實際 ${model.actual.symbol}`,
+                points: actualPoints,
+                renderedPoints: renderedActualPoints,
+            });
+        }
+        if (
+            showSynthetic &&
+            model.synthetic !== undefined &&
+            model.synthetic !== null
+        ) {
+            options.push({
+                key: "synthetic",
+                label: `合成 ${model.synthetic.symbol}`,
+                points: syntheticPoints,
+                renderedPoints: renderedSyntheticPoints,
+            });
+        }
+        return options;
+    }, [
+        actualPoints,
+        model.actual.symbol,
+        model.prototype.symbol,
+        model.synthetic,
+        prototypePoints,
+        renderedActualPoints,
+        renderedPrototypePoints,
+        renderedSyntheticPoints,
+        showActual,
+        showPrototype,
+        showSynthetic,
+        syntheticPoints,
+    ]);
+    const selectedMeasurementOption =
+        measurementOptions.find(
+            (option) => option.key === measurementSeries,
+        ) ??
+        measurementOptions[0] ??
+        null;
     const measurement = useMemo(() => {
         const first = measurementSessions[0];
         const second = measurementSessions[1];
-        if (first === undefined || second === undefined) {
+        if (
+            first === undefined ||
+            second === undefined ||
+            selectedMeasurementOption === null
+        ) {
             return null;
         }
         try {
-            return measureChartRange(prototypePoints, first, second);
+            return measureChartRange(
+                selectedMeasurementOption.points,
+                first,
+                second,
+            );
         } catch {
             return null;
         }
-    }, [measurementSessions, prototypePoints]);
+    }, [measurementSessions, selectedMeasurementOption]);
+
+    const updateSeriesVisibility = (
+        key: MeasurementSeriesKey,
+        visible: boolean,
+    ) => {
+        if (key === "prototype") {
+            setShowPrototype(visible);
+        } else if (key === "actual") {
+            setShowActual(visible);
+        } else {
+            setShowSynthetic(visible);
+        }
+        if (!visible && selectedMeasurementOption?.key === key) {
+            const fallback = measurementOptions.find(
+                (option) => option.key !== key,
+            );
+            if (fallback !== undefined) {
+                setMeasurementSeries(fallback.key);
+            }
+            setMeasurementSessions([]);
+        }
+    };
 
     useEffect(() => {
         const container = containerRef.current;
@@ -382,7 +479,8 @@ export function ResearchChart({
             const session = timeKey(parameter.time);
             if (
                 session === null ||
-                !renderedPrototypePoints.some(
+                selectedMeasurementOption === null ||
+                !selectedMeasurementOption.renderedPoints.some(
                     (point) => point.session === session,
                 )
             ) {
@@ -420,6 +518,7 @@ export function ResearchChart({
         renderedPrototypePoints,
         renderedSyntheticPoints,
         scaleMode,
+        selectedMeasurementOption,
         seriesMode,
         showActual,
         showPrototype,
@@ -522,7 +621,10 @@ export function ResearchChart({
                         type="checkbox"
                         checked={showPrototype}
                         onChange={(event) =>
-                            setShowPrototype(event.currentTarget.checked)
+                            updateSeriesVisibility(
+                                "prototype",
+                                event.currentTarget.checked,
+                            )
                         }
                     />
                     原型 {model.prototype.symbol}
@@ -532,7 +634,10 @@ export function ResearchChart({
                         type="checkbox"
                         checked={showActual}
                         onChange={(event) =>
-                            setShowActual(event.currentTarget.checked)
+                            updateSeriesVisibility(
+                                "actual",
+                                event.currentTarget.checked,
+                            )
                         }
                     />
                     實際 {model.actual.symbol}
@@ -544,12 +649,100 @@ export function ResearchChart({
                             type="checkbox"
                             checked={showSynthetic}
                             onChange={(event) =>
-                                setShowSynthetic(event.currentTarget.checked)
+                                updateSeriesVisibility(
+                                    "synthetic",
+                                    event.currentTarget.checked,
+                                )
                             }
                         />
                         合成壓力序列
                     </label>
                 )}
+            </div>
+            <div
+                className="chart-measurement-controls"
+                role="group"
+                aria-label="兩點量測控制"
+            >
+                <label>
+                    <span>量測序列</span>
+                    <select
+                        value={selectedMeasurementOption?.key ?? ""}
+                        disabled={measurementOptions.length === 0}
+                        onChange={(event) => {
+                            setMeasurementSeries(
+                                event.currentTarget
+                                    .value as MeasurementSeriesKey,
+                            );
+                            setMeasurementSessions([]);
+                        }}
+                    >
+                        {measurementOptions.map((option) => (
+                            <option key={option.key} value={option.key}>
+                                {option.label}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+                <label>
+                    <span>量測起點</span>
+                    <input
+                        type="date"
+                        min={
+                            selectedMeasurementOption?.renderedPoints.at(0)
+                                ?.session
+                        }
+                        max={
+                            selectedMeasurementOption?.renderedPoints.at(-1)
+                                ?.session
+                        }
+                        value={measurementSessions[0] ?? ""}
+                        disabled={selectedMeasurementOption === null}
+                        onChange={(event) => {
+                            const session = event.currentTarget.value;
+                            setMeasurementSessions((current) =>
+                                session.length === 0
+                                    ? []
+                                    : current[1] === undefined
+                                      ? [session]
+                                      : [session, current[1]],
+                            );
+                        }}
+                    />
+                </label>
+                <label>
+                    <span>量測終點</span>
+                    <input
+                        type="date"
+                        min={
+                            selectedMeasurementOption?.renderedPoints.at(0)
+                                ?.session
+                        }
+                        max={
+                            selectedMeasurementOption?.renderedPoints.at(-1)
+                                ?.session
+                        }
+                        value={measurementSessions[1] ?? ""}
+                        disabled={measurementSessions[0] === undefined}
+                        onChange={(event) => {
+                            const session = event.currentTarget.value;
+                            setMeasurementSessions((current) =>
+                                session.length === 0
+                                    ? current.slice(0, 1)
+                                    : current[0] === undefined
+                                      ? []
+                                      : [current[0], session],
+                            );
+                        }}
+                    />
+                </label>
+                <button
+                    type="button"
+                    disabled={measurementSessions.length === 0}
+                    onClick={() => setMeasurementSessions([])}
+                >
+                    清除量測
+                </button>
             </div>
             <div
                 className={`chart-stage ${model.portfolio === undefined ? "chart-stage--two-pane" : "chart-stage--three-pane"}`}
@@ -558,7 +751,10 @@ export function ResearchChart({
                 <DepthBands />
                 <div ref={containerRef} className="chart-canvas" />
             </div>
-            <MeasurementReadout measurement={measurement} />
+            <MeasurementReadout
+                measurement={measurement}
+                seriesLabel={selectedMeasurementOption?.label ?? null}
+            />
         </section>
     );
 }

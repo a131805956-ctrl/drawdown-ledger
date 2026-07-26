@@ -1,10 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { vi } from "vitest";
 
 import { App } from "../src/app/App";
 import { createStaticResearchApi } from "../src/lib/api";
 import { MemoryRouter } from "../src/lib/router";
 import type {
+    ReportExportResponse,
     ReportListResponse,
     ResultListResponse,
 } from "../src/lib/contracts";
@@ -152,5 +154,100 @@ describe("report and comparison ledger", () => {
             screen.getByRole("table", { name: "已儲存研究報告" }),
         ).toHaveTextContent("TQQQ 平衡策略");
         expect(screen.getByText(/靜態備援資料日 2026-07-31/)).toBeVisible();
+        expect(
+            screen.getByRole("link", { name: "開啟已公開報告清單" }),
+        ).toHaveAttribute("href", "/reports/index.html");
+        expect(
+            screen.queryByRole("button", { name: "建立私人匯出" }),
+        ).not.toBeInTheDocument();
+    });
+
+    it("exports one trusted result with explicit formats in live mode", async () => {
+        const user = userEvent.setup();
+        const exportResponse: ReportExportResponse = {
+            schema_version: "1.0",
+            export_id: "export-0123456789abcdef01234567",
+            result_id: "result-2",
+            artifacts: {
+                html: {
+                    relative_path: "report.html",
+                    media_type: "text/html; charset=utf-8",
+                    sha256: "a".repeat(64),
+                    size_bytes: 200,
+                },
+                json: {
+                    relative_path: "report.json",
+                    media_type: "application/json",
+                    sha256: "b".repeat(64),
+                    size_bytes: 300,
+                },
+            },
+            lineage: {
+                engine_version: "0.1.0",
+                git_commit: "c".repeat(40),
+                code_state: "clean",
+                data_hashes: { QLD: "d".repeat(64) },
+                data_lineage: {},
+                policy_cutoff: "2026-06-30",
+                actual_session_cutoff: "2026-06-30",
+                result_sha256: "e".repeat(64),
+                generated_at: "2026-07-26T02:00:00Z",
+                timezone: "Asia/Taipei",
+                parameters: {},
+                parameters_sha256: "f".repeat(64),
+                analysis_boundary: {},
+                assumptions: [],
+                limitations: [],
+            },
+        };
+        const exportReport = vi.fn().mockResolvedValue(exportResponse);
+        const api = {
+            ...createStaticResearchApi({
+                instruments: {
+                    schema_version: "1.0",
+                    instruments: [],
+                },
+                overview: {
+                    schema_version: "1.0",
+                    instrument_count: 0,
+                    cached_symbols: [],
+                    formal_result_count: 2,
+                },
+                health: {
+                    schema_version: "1.0",
+                    status: "healthy",
+                    coverage: [],
+                },
+                results,
+                reports,
+            }),
+            exportReport,
+        };
+        render(
+            <MemoryRouter initialEntries={["/reports"]}>
+                <App api={api} capability={{ mode: "live" }} />
+            </MemoryRouter>,
+        );
+
+        await user.selectOptions(
+            await screen.findByLabelText("匯出結果"),
+            "result-2",
+        );
+        await user.click(screen.getByRole("checkbox", { name: "CSV" }));
+        await user.click(
+            screen.getByRole("button", { name: "建立私人匯出" }),
+        );
+
+        expect(exportReport).toHaveBeenCalledWith({
+            schema_version: "1.0",
+            result_id: "result-2",
+            formats: ["html", "json"],
+        });
+        expect(
+            await screen.findByText(
+                /export-0123456789abcdef01234567/,
+            ),
+        ).toBeVisible();
+        expect(screen.getByText(/只建立私人 bundle/)).toBeVisible();
     });
 });

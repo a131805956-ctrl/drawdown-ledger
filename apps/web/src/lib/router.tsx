@@ -142,6 +142,10 @@ export function useLocation(): RouterLocation {
     return useRouter().location;
 }
 
+export function useNavigate(): RouterContextValue["navigate"] {
+    return useRouter().navigate;
+}
+
 export function useSearchParams(): readonly [URLSearchParams] {
     const { search } = useLocation();
     return useMemo(() => [new URLSearchParams(search)] as const, [search]);

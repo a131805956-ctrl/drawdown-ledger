@@ -102,6 +102,17 @@ export interface components {
             "target_policy_cutoff": string | null;
             "target_symbol": string;
         };
+        "ExportedReportContentResponse": {
+            "artifacts": {
+                [key: string]: components["schemas"]["ReportArtifactResponse"];
+            };
+            "export_id": string;
+            "lineage": components["schemas"]["ReportLineageResponse"];
+            "message": string;
+            "optimization": components["schemas"]["OptimizationResultPayload"];
+            "result_id": string;
+            "status": "exported";
+        };
         "ForwardReturnResponse": {
             "exit_date": string | null;
             "horizon_sessions": number;
@@ -281,18 +292,71 @@ export interface components {
             "ratios": Array<number>;
             "stability_adjusted_xirr": number;
         };
+        "ReportArtifactResponse": {
+            "media_type": string;
+            "relative_path": string;
+            "sha256": string;
+            "size_bytes": number;
+        };
         "ReportContentResponse": {
             "message": string;
             "optimization": components["schemas"]["OptimizationResultPayload"];
             "result_id": string;
             "status": "not_yet_exported";
         };
+        "ReportDataLineageResponse": {
+            "actual_session_cutoff": string;
+            "classification": "actual" | "synthetic";
+            "fetched_at": string;
+            "policy_cutoff": string;
+            "provider": string;
+            "sha256": string;
+        };
+        "ReportExportRequest": {
+            "formats"?: Array<"html" | "json" | "csv">;
+            "result_id": string;
+            "schema_version"?: "1.0";
+        };
+        "ReportExportResponse": {
+            "artifacts": {
+                [key: string]: components["schemas"]["ReportArtifactResponse"];
+            };
+            "export_id": string;
+            "lineage": components["schemas"]["ReportLineageResponse"];
+            "result_id": string;
+            "schema_version"?: "1.0";
+        };
+        "ReportLineageResponse": {
+            "actual_session_cutoff": string;
+            "analysis_boundary": {
+                [key: string]: string;
+            };
+            "assumptions": Array<string>;
+            "code_state": "clean" | "dirty" | "injected";
+            "data_hashes": {
+                [key: string]: string;
+            };
+            "data_lineage": {
+                [key: string]: components["schemas"]["ReportDataLineageResponse"];
+            };
+            "engine_version": string;
+            "generated_at": string;
+            "git_commit": string;
+            "limitations": Array<string>;
+            "parameters": {
+                [key: string]: unknown;
+            };
+            "parameters_sha256": string;
+            "policy_cutoff": string;
+            "result_sha256": string;
+            "timezone": string;
+        };
         "ReportListResponse": {
             "reports": Array<components["schemas"]["ReportResponse"]>;
             "schema_version"?: "1.0";
         };
         "ReportResponse": {
-            "content": components["schemas"]["ReportContentResponse"] | components["schemas"]["LegacyReportContent"];
+            "content": components["schemas"]["ReportContentResponse"] | components["schemas"]["ExportedReportContentResponse"] | components["schemas"]["LegacyReportContent"];
             "created_at": string;
             "export_status": "not_yet_exported" | "exported";
             "id": string;
@@ -569,6 +633,18 @@ export interface paths {
                 requestBody: never;
                 responses: {
                     "200": components["schemas"]["ReportListResponse"];
+                    "404": components["schemas"]["ErrorResponse"];
+                    "409": components["schemas"]["ErrorResponse"];
+                    "422": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    "/api/v1/reports/export": {
+            post: {
+                parameters: Record<string, never>;
+                requestBody: components["schemas"]["ReportExportRequest"];
+                responses: {
+                    "201": components["schemas"]["ReportExportResponse"];
                     "404": components["schemas"]["ErrorResponse"];
                     "409": components["schemas"]["ErrorResponse"];
                     "422": components["schemas"]["ErrorResponse"];

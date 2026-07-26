@@ -2,7 +2,12 @@ export const DEFAULT_PUBLIC_BASE_PATH = "/drawdown-ledger/";
 
 function normalisePublicBasePath(value: string): string {
     const trimmed = value.trim();
-    if (trimmed === "" || trimmed === "/" || trimmed === "." || trimmed === "./") {
+    if (
+        trimmed === "" ||
+        trimmed === "/" ||
+        trimmed === "." ||
+        trimmed === "./"
+    ) {
         return "";
     }
     if (

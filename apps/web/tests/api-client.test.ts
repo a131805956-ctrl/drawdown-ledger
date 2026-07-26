@@ -30,6 +30,35 @@ describe("research API clients", () => {
         );
     });
 
+    it("keeps configured API requests inside a nested public mount", async () => {
+        const fetcher = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    schema_version: "1.0",
+                    instrument_count: 0,
+                    cached_symbols: [],
+                    formal_result_count: 0,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        );
+
+        await createLiveResearchApi({
+            fetcher,
+            baseUrl: "/drawdown-ledger/api/v1",
+        }).getMarketOverview();
+
+        expect(fetcher).toHaveBeenCalledWith(
+            "/drawdown-ledger/api/v1/market/overview",
+            expect.objectContaining({
+                headers: { Accept: "application/json" },
+            }),
+        );
+    });
+
     it("encodes market-series queries and JSON research requests", async () => {
         const fetcher = vi
             .fn()
@@ -79,6 +108,43 @@ describe("research API clients", () => {
                     target_symbol: "TQQQ",
                     threshold: 0.3,
                     horizons: [21, 252],
+                }),
+            }),
+        );
+    });
+
+    it("exports a trusted result with explicit report formats", async () => {
+        const fetcher = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    schema_version: "1.0",
+                    export_id: "export-0123456789abcdef01234567",
+                    result_id: "result-1",
+                    artifacts: {},
+                    lineage: {},
+                }),
+                {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        );
+        const api = createLiveResearchApi({ fetcher });
+
+        await api.exportReport({
+            schema_version: "1.0",
+            result_id: "result-1",
+            formats: ["html", "json"],
+        });
+
+        expect(fetcher).toHaveBeenCalledWith(
+            "/api/v1/reports/export",
+            expect.objectContaining({
+                method: "POST",
+                body: JSON.stringify({
+                    schema_version: "1.0",
+                    result_id: "result-1",
+                    formats: ["html", "json"],
                 }),
             }),
         );
@@ -151,5 +217,17 @@ describe("research API clients", () => {
                 threshold: 0.3,
             }),
         ).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("never exports private results from static backup mode", async () => {
+        const api = createStaticResearchApi();
+
+        await expect(
+            api.exportReport({
+                schema_version: "1.0",
+                result_id: "result-1",
+                formats: ["json"],
+            }),
+        ).rejects.toMatchObject({ status: 405 });
     });
 });

@@ -2,6 +2,29 @@ import { useQuery } from "@tanstack/react-query";
 
 import { RouteState } from "../components/RouteState";
 import { useResearchData } from "../lib/api";
+import { requiredPolicyCutoff } from "../lib/calendar";
+import type { DataCoverage } from "../lib/contracts";
+
+type CoverageJudgement =
+    | "符合截止政策"
+    | "資料過期"
+    | "資料缺漏";
+
+function coverageJudgement(
+    row: DataCoverage,
+    requiredCutoff: string,
+): CoverageJudgement {
+    if (
+        !row.cached ||
+        row.policy_cutoff === null ||
+        row.actual_last_session === null
+    ) {
+        return "資料缺漏";
+    }
+    return row.policy_cutoff === requiredCutoff
+        ? "符合截止政策"
+        : "資料過期";
+}
 
 export function DataHealthPage() {
     const { api, capability } = useResearchData();
@@ -35,7 +58,12 @@ export function DataHealthPage() {
     }
 
     const rows = healthQuery.data.coverage;
-    const cachedCount = rows.filter((row) => row.cached).length;
+    const requiredCutoff = requiredPolicyCutoff(capability);
+    const compliantCount = rows.filter(
+        (row) =>
+            coverageJudgement(row, requiredCutoff) ===
+            "符合截止政策",
+    ).length;
 
     return (
         <section className="page">
@@ -68,11 +96,11 @@ export function DataHealthPage() {
                             <small>schema 1.0</small>
                         </article>
                         <article>
-                            <span>已快取</span>
+                            <span>符合截止</span>
                             <strong>
-                                {cachedCount} / {rows.length}
+                                {compliantCount} / {rows.length}
                             </strong>
-                            <small>逐代碼追蹤</small>
+                            <small>要求 {requiredCutoff}</small>
                         </article>
                         <article>
                             <span>資料模式</span>
@@ -102,10 +130,11 @@ export function DataHealthPage() {
                             </thead>
                             <tbody>
                                 {rows.map((row) => {
-                                    const policyComplete =
-                                        row.cached &&
-                                        row.policy_cutoff !== null &&
-                                        row.actual_last_session !== null;
+                                    const judgement =
+                                        coverageJudgement(
+                                            row,
+                                            requiredCutoff,
+                                        );
                                     return (
                                         <tr key={row.symbol}>
                                             <th scope="row">{row.symbol}</th>
@@ -131,9 +160,7 @@ export function DataHealthPage() {
                                                 />
                                             </td>
                                             <td>
-                                                {policyComplete
-                                                    ? "符合截止政策"
-                                                    : "需要檢查"}
+                                                {judgement}
                                             </td>
                                         </tr>
                                     );

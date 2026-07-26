@@ -107,6 +107,16 @@ function optimizationApi() {
                     timezone: "America/New_York",
                     inception: "2010-02-11",
                 },
+                {
+                    symbol: "UPRO",
+                    name: "ProShares UltraPro S&P500",
+                    family_id: "sp-500",
+                    leverage: 3,
+                    prototype_symbol: "^GSPC",
+                    currency: "USD",
+                    timezone: "America/New_York",
+                    inception: "2009-06-23",
+                },
             ],
         },
         overview: {
@@ -137,6 +147,126 @@ function optimizationApi() {
 }
 
 describe("AI-operable optimization workbench", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("uses the previous calendar month in Asia/Taipei at the local month boundary", () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-07-31T16:30:00.000Z"));
+
+        render(
+            <MemoryRouter initialEntries={["/ai"]}>
+                <App
+                    api={optimizationApi()}
+                    capability={{ mode: "live" }}
+                />
+            </MemoryRouter>,
+        );
+
+        expect(screen.getByLabelText("AI 回測結束日")).toHaveValue(
+            "2026-07-31",
+        );
+    });
+
+    it("initializes from the family query and follows family-rail navigation", async () => {
+        const user = userEvent.setup();
+        render(
+            <MemoryRouter initialEntries={["/ai?family=sp-500"]}>
+                <App
+                    api={optimizationApi()}
+                    capability={{ mode: "live" }}
+                />
+            </MemoryRouter>,
+        );
+
+        await screen.findByRole("option", { name: "S&P 500" });
+        expect(screen.getByLabelText("AI 指數家族")).toHaveValue(
+            "sp-500",
+        );
+        expect(screen.getByLabelText("AI 分析標的")).toHaveValue("UPRO");
+        expect(
+            screen.getByRole("link", { name: /S&P 500/ }),
+        ).toHaveAttribute("aria-current", "true");
+
+        await user.click(
+            screen.getByRole("link", { name: /NASDAQ-100/ }),
+        );
+
+        expect(screen.getByLabelText("AI 指數家族")).toHaveValue(
+            "nasdaq-100",
+        );
+        expect(screen.getByLabelText("AI 分析標的")).toHaveValue("TQQQ");
+    });
+
+    it("syncs form and imported family changes back to the URL-backed rail", async () => {
+        const user = userEvent.setup();
+        render(
+            <MemoryRouter initialEntries={["/ai?family=nasdaq-100"]}>
+                <App
+                    api={optimizationApi()}
+                    capability={{ mode: "live" }}
+                />
+            </MemoryRouter>,
+        );
+
+        await screen.findByRole("option", { name: "S&P 500" });
+        await user.selectOptions(
+            screen.getByLabelText("AI 指數家族"),
+            "sp-500",
+        );
+        expect(screen.getByLabelText("AI 分析標的")).toHaveValue("UPRO");
+        expect(
+            screen.getByRole("link", { name: /S&P 500/ }),
+        ).toHaveAttribute("aria-current", "true");
+
+        const request = {
+            schema_version: "1.0",
+            family_id: "nasdaq-100",
+            target_symbol: "TQQQ",
+            depths: ["0.20", "0.30", "0.40"],
+            ratio_search: {
+                minimum_basis_points: 0,
+                maximum_basis_points: 10_000,
+                step_basis_points: 1_000,
+                monotone: true,
+            },
+            walk_forward: {
+                n_splits: 3,
+                minimum_train_independent_episodes: 1,
+                minimum_test_independent_episodes: 1,
+            },
+            strategy: {
+                start: "2011-01-03",
+                end: "2026-07-31",
+                initial_cash: "10000",
+                monthly_contribution: "1000",
+                annual_contribution_growth: "0.03",
+                cash_interest_rate: "0.015",
+                dividend_policy: "cash",
+            },
+        };
+        const importInput = screen.getByLabelText("匯入 AI 設定 JSON");
+        await user.upload(
+            importInput,
+            new File([JSON.stringify(request)], "request.json", {
+                type: "application/json",
+            }),
+        );
+
+        expect(await screen.findByRole("status")).toHaveTextContent(
+            "設定已匯入",
+        );
+        expect(importInput).toHaveValue("");
+        expect(screen.getByLabelText("AI 指數家族")).toHaveValue(
+            "nasdaq-100",
+        );
+        expect(screen.getByLabelText("AI 分析標的")).toHaveValue("TQQQ");
+        expect(
+            screen.getByRole("link", { name: /NASDAQ-100/ }),
+        ).toHaveAttribute("aria-current", "true");
+    });
+
     it("submits a deterministic grid, polls the job, and exposes profile recommendations", async () => {
         const user = userEvent.setup();
         const api = optimizationApi();
@@ -163,6 +293,23 @@ describe("AI-operable optimization workbench", () => {
         expect(
             screen.getByRole("table", { name: "Pareto 候選策略" }),
         ).toHaveTextContent("25% / 35% / 40%");
+        expect(
+            screen.getByRole("table", { name: "Pareto 候選策略" }),
+        ).toHaveTextContent("Walk-forward");
+        expect(
+            screen.getByRole("table", { name: "Pareto 候選策略" }),
+        ).toHaveTextContent("合格");
+        expect(
+            screen.getByRole("button", { name: "下載結果 JSON" }),
+        ).toHaveAttribute("data-ai-action", "download-result-json");
+        const machineResult =
+            document.querySelector<HTMLTextAreaElement>(
+                "[data-ai-result='result-json']",
+            );
+        expect(machineResult).not.toBeNull();
+        expect(
+            JSON.parse(machineResult?.value ?? "{}"),
+        ).toMatchObject({ id: "result-1" });
         expect(api.createOptimization).toHaveBeenCalledWith(
             expect.objectContaining({
                 family_id: "nasdaq-100",
