@@ -6,6 +6,7 @@ on:
       - "v*"
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -16,6 +17,25 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Verify reviewed main and successful CI provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --no-tags origin main
+          release_commit=$(git rev-parse "${GITHUB_SHA}^{commit}")
+          git merge-base --is-ancestor "${release_commit}" origin/main
+          ci_run_id=$(
+            gh run list \
+              --workflow CI \
+              --commit "${release_commit}" \
+              --event push \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty'
+          )
+          test -n "${ci_run_id}"
       - name: Validate release version
         shell: bash
         run: |
