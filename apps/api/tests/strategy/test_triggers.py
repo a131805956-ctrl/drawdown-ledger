@@ -65,6 +65,22 @@ def test_starting_mid_drawdown_triggers_all_satisfied_tiers_next_open() -> None:
         date(2020, 3, 13),
         date(2020, 3, 13),
     ]
+    assert [trade.prototype_drawdown for trade in result.trades[:2]] == [
+        Decimal("-0.35"),
+        Decimal("-0.35"),
+    ]
+    assert [trade.target_drawdown for trade in result.trades[:2]] == [
+        Decimal("-0.35"),
+        Decimal("-0.35"),
+    ]
+    assert [trade.post_trade_cash for trade in result.trades[:2]] == [
+        Decimal("750000.00"),
+        Decimal("450000.00"),
+    ]
+    assert [trade.marker_profit_loss for trade in result.trades[:2]] == [
+        Decimal("0.00"),
+        Decimal("0.00"),
+    ]
 
 
 def test_close_signal_never_executes_at_same_day_open() -> None:

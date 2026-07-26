@@ -71,7 +71,7 @@ def synthetic_daily_reset_nav(
     if sessions_per_year <= 0:
         raise ValueError("Sessions per year must be positive")
 
-    returns = prototype.data["adj_close"].astype(float).pct_change()
+    returns = prototype.data["price_close"].astype(float).pct_change()
     daily_fee = annual_expense_ratio / sessions_per_year
     values = [initial_nav]
     for daily_return in returns.iloc[1:]:
