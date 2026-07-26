@@ -82,12 +82,9 @@ export function MarketOverviewPage() {
                         <small>正向 1×—3×</small>
                     </article>
                     <article className="metric-card">
-                        <span>資料覆蓋</span>
-                        <strong>
-                            {overview.cached_symbols.length} /{" "}
-                            {overview.instrument_count}
-                        </strong>
-                        <small>已快取序列</small>
+                        <span>資料序列</span>
+                        <strong>{overview.cached_symbols.length}</strong>
+                        <small>含原型與代理序列</small>
                     </article>
                     <article className="metric-card">
                         <span>正式結果</span>

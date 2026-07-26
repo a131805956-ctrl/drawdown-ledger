@@ -106,7 +106,8 @@ describe("market overview route", () => {
             await screen.findByRole("heading", { name: "市場總覽" }),
         ).toBeVisible();
         expect(screen.getByText("16")).toBeVisible();
-        expect(screen.getByText("2 / 16")).toBeVisible();
+        expect(screen.getByText("2")).toBeVisible();
+        expect(screen.getByText("含原型與代理序列")).toBeVisible();
         expect(screen.getByText("4")).toBeVisible();
         expect(screen.getAllByText("NASDAQ-100").length).toBeGreaterThan(0);
     });
