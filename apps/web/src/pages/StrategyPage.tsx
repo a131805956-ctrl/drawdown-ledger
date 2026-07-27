@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     useMemo,
     useState,
@@ -202,6 +202,7 @@ function stepNumericInput(event: WheelEvent<HTMLFormElement>): void {
 
 export function StrategyPage() {
     const { api, capability } = useResearchData();
+    const queryClient = useQueryClient();
     const [parameters] = useSearchParams();
     const [familyId, setFamilyId] = useState(
         parameters.get("family") ?? "nasdaq-100",
@@ -278,6 +279,12 @@ export function StrategyPage() {
                         ? (startingInvestment / openingPrice).toFixed(8)
                         : "0",
                 monthly_contribution: monthlyContribution,
+                monthly_invest_fraction:
+                    decimalPercent(monthlyInvestPercent),
+                monthly_cash_reserve_fraction:
+                    decimalPercent(
+                        String(Math.max(0, 100 - Number(monthlyInvestPercent || 0))),
+                    ),
                 annual_contribution_growth:
                     decimalPercent(annualGrowthPercent),
                 contribution_day: Number(contributionDay),
@@ -295,6 +302,9 @@ export function StrategyPage() {
             };
             const result = await api.backtestStrategy(request);
             return { result, series };
+        },
+        onSuccess: (bundle) => {
+            queryClient.setQueryData(["strategy-latest"], bundle);
         },
     });
 
@@ -923,8 +933,16 @@ export function StrategyPage() {
                     </span>
                 </div>
             ) : null}
-            {backtest.data === undefined ? null : (
-                <StrategyResult bundle={backtest.data} tiers={tiers} />
+            {(backtest.data ??
+                queryClient.getQueryData<StrategyBundle>(["strategy-latest"])) ===
+            undefined ? null : (
+                <StrategyResult
+                    bundle={
+                        backtest.data ??
+                        queryClient.getQueryData<StrategyBundle>(["strategy-latest"])!
+                    }
+                    tiers={tiers}
+                />
             )}
         </section>
     );
@@ -1005,6 +1023,18 @@ function StrategyResult({
                     累積投入
                     <strong>
                         {money(result.contribution_total, currency)}
+                    </strong>
+                </span>
+                <span>
+                    每月立即投入
+                    <strong>
+                        {money(result.invested_contribution_total, currency)}
+                    </strong>
+                </span>
+                <span>
+                    每月入庫
+                    <strong>
+                        {money(result.reserved_contribution_total, currency)}
                     </strong>
                 </span>
                 <span>

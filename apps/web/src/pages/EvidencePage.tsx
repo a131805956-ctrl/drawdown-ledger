@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     useMemo,
     useState,
@@ -256,6 +256,7 @@ function EpisodeTable({
 
 export function EvidencePage() {
     const { api, capability } = useResearchData();
+    const queryClient = useQueryClient();
     const [searchParameters] = useSearchParams();
     const requestedFamily =
         searchParameters.get("family") ?? "nasdaq-100";
@@ -314,6 +315,9 @@ export function EvidencePage() {
                 }),
             ]);
             return { evidence, series };
+        },
+        onSuccess: (bundle) => {
+            queryClient.setQueryData(["evidence-latest"], bundle);
         },
     });
 
@@ -439,7 +443,9 @@ export function EvidencePage() {
                 </div>
             ) : null}
 
-            {analysis.data === undefined ? (
+            {(analysis.data ??
+                queryClient.getQueryData<EvidenceBundle>(["evidence-latest"])) ===
+            undefined ? (
                 <div className="research-empty">
                     <span aria-hidden="true">EV</span>
                     <div>
@@ -452,7 +458,10 @@ export function EvidencePage() {
                 </div>
             ) : (
                 <EvidenceResult
-                    bundle={analysis.data}
+                    bundle={
+                        analysis.data ??
+                        queryClient.getQueryData<EvidenceBundle>(["evidence-latest"])!
+                    }
                     threshold={selectedThreshold}
                 />
             )}

@@ -177,7 +177,7 @@ export function MarketOverviewPage() {
                         : startMode === "index-earliest"
                           ? "prototype_earliest"
                           : "target_inception",
-            } as Parameters<typeof api.getMarketSeries>[0]),
+            }),
         enabled: hasSelection && selectedFamily !== null && selectedInstrument !== null,
     });
 
@@ -365,6 +365,18 @@ export function MarketOverviewPage() {
                                 <div className="overview-chart-stats" aria-label="即時價格摘要">
                                     <span>目前 ETF 價格 <strong>{currentPoint === undefined ? "—" : currency(currentPoint.close, seriesQuery.data?.actual.currency ?? null)}</strong></span>
                                     <span>原型指數 ATH 距離 <strong>{athDistance === null ? "—" : percent(athDistance)}</strong></span>
+                                    {seriesQuery.data?.model_assumptions === null ||
+                                    seriesQuery.data?.model_assumptions === undefined ? null : (
+                                        <span>
+                                            模擬成本 <strong>
+                                                管理費 {percent(seriesQuery.data.model_assumptions.annual_management_fee)} · 日拖累 {percent(
+                                                    seriesQuery.data.model_assumptions.daily_financing_drag +
+                                                    seriesQuery.data.model_assumptions.daily_roll_drag +
+                                                    seriesQuery.data.model_assumptions.daily_transaction_drag,
+                                                )}
+                                            </strong>
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                             <ResearchChart model={chartModel} height={680} />

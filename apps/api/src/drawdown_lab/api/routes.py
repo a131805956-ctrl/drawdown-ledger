@@ -328,6 +328,8 @@ def create_router(
             trade_count=len(result.trades),
             dividend_income=result.dividend_income,
             contribution_total=result.contribution_total,
+            invested_contribution_total=result.invested_contribution_total,
+            reserved_contribution_total=result.reserved_contribution_total,
             interest_income=result.interest_income,
             total_fees=result.total_fees,
             pending_thresholds=result.pending_thresholds,

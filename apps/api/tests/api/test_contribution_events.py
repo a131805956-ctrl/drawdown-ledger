@@ -91,6 +91,36 @@ def test_backtest_pause_suppresses_month_until_resume(tmp_path: Path) -> None:
     assert response.json()["ending_cash"] == "1100.00"
 
 
+def test_backtest_splits_monthly_contributions_between_investment_and_cash_pool(
+    tmp_path: Path,
+) -> None:
+    payload = _strategy_payload([])
+    payload.update(
+        {
+            "monthly_invest_fraction": "0.25",
+            "monthly_cash_reserve_fraction": "0.75",
+        }
+    )
+    with _client(tmp_path) as client:
+        response = client.post("/api/v1/strategies/backtest", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["contribution_total"] == "200.00"
+    assert body["invested_contribution_total"] == "50.00"
+    assert body["reserved_contribution_total"] == "150.00"
+    assert any(trade["kind"] == "dca" for trade in body["trades"])
+    assert all(
+        {
+            "external_contribution",
+            "cash_pool_inflow",
+            "immediate_investment",
+            "cash_pool_balance",
+        }.issubset(point)
+        for point in body["equity_curve"]
+    )
+
+
 @pytest.mark.parametrize(
     "event",
     [
