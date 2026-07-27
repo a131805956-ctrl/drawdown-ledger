@@ -440,6 +440,7 @@ def create_router(
                 detail="Custom history mode requires a start date",
             )
         effective_start: date | None
+        response_history_mode = history_mode
         if history_mode == "prototype_earliest":
             effective_start = prototype_first if start is None else start
         elif history_mode == "custom":
@@ -448,6 +449,8 @@ def create_router(
             # Supplying start retains the original API's date-filter behavior;
             # otherwise the ETF's first trusted session is the default.
             effective_start = target_first if start is None else start
+            if start is not None:
+                response_history_mode = "custom"
         if effective_start is not None and end is not None and end < effective_start:
             raise HTTPException(status_code=422, detail="End date cannot precede start date")
         if start is not None and end is not None and end < start:
@@ -570,7 +573,7 @@ def create_router(
             prototype_source=trusted.prototype_source,
             target_symbol=target.symbol,
             handoff_session=handoff_session if target.leverage > 1 else None,
-            history_mode=history_mode,
+            history_mode=response_history_mode,
             history_start=effective_start,
             history_end=end,
             join_session=handoff_session if target.leverage > 1 else None,
