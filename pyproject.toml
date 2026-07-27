@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "drawdown-lab"
-version = "0.2.1"
+version = "0.2.2"
 description = "Evidence-first ETF drawdown research platform"
 requires-python = ">=3.11"
 dependencies = [

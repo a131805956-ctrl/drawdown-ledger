@@ -6,6 +6,10 @@ from decimal import Decimal
 
 import pandas as pd
 import pytest
+from drawdown_lab.analysis.leverage import (
+    default_synthetic_model_parameters,
+    synthetic_daily_reset_nav,
+)
 from drawdown_lab.data.models import MarketFrame
 from drawdown_lab.optimization import evaluator as evaluator_module
 from drawdown_lab.optimization.evaluator import (
@@ -40,6 +44,27 @@ def _frame(prices: tuple[float, ...]) -> MarketFrame:
         index=index,
     )
     return MarketFrame(data)
+
+
+def test_synthetic_stress_frame_uses_daily_friction_defaults() -> None:
+    prototype = _frame((100, 110, 100))
+    stressed = evaluator_module._synthetic_market_frame(
+        prototype,
+        leverage=3,
+        annual_expense_ratio=0.0095,
+    )
+    management, financing, roll, transaction = default_synthetic_model_parameters(3)
+    expected = synthetic_daily_reset_nav(
+        prototype,
+        3,
+        annual_management_fee=management,
+        daily_financing_drag=financing,
+        daily_roll_drag=roll,
+        daily_transaction_drag=transaction,
+    )
+    assert stressed.data["price_close"].tolist() == pytest.approx(
+        expected.nav.tolist()
+    )
 
 
 PROTOTYPE_PRICES = (

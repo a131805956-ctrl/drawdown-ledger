@@ -10,7 +10,10 @@ import pandas as pd
 
 from drawdown_lab.analysis.cashflows import ContributionEvent, ContributionSchedule
 from drawdown_lab.analysis.episodes import classify_episodes
-from drawdown_lab.analysis.leverage import synthetic_daily_reset_nav
+from drawdown_lab.analysis.leverage import (
+    default_synthetic_model_parameters,
+    synthetic_daily_reset_nav,
+)
 from drawdown_lab.analysis.strategy import (
     DividendPolicy,
     StrategyConfig,
@@ -454,10 +457,16 @@ def _synthetic_market_frame(
     leverage: int,
     annual_expense_ratio: float,
 ) -> MarketFrame:
+    _, financing_drag, roll_drag, transaction_drag = default_synthetic_model_parameters(
+        leverage
+    )
     synthetic = synthetic_daily_reset_nav(
         prototype,
         leverage,
-        annual_expense_ratio=annual_expense_ratio,
+        annual_management_fee=annual_expense_ratio,
+        daily_financing_drag=financing_drag,
+        daily_roll_drag=roll_drag,
+        daily_transaction_drag=transaction_drag,
     )
     values = synthetic.nav.astype(float)
     data = pd.DataFrame(
