@@ -260,7 +260,9 @@ export function EvidencePage() {
     const requestedFamily =
         searchParameters.get("family") ?? "nasdaq-100";
     const [familyId, setFamilyId] = useState(requestedFamily);
-    const [targetChoice, setTargetChoice] = useState("");
+    const [targetChoice, setTargetChoice] = useState(
+        searchParameters.get("instrument") ?? "",
+    );
     const [thresholdPercent, setThresholdPercent] = useState("30");
     const instrumentsQuery = useQuery({
         queryKey: ["instruments"],
@@ -287,6 +289,9 @@ export function EvidencePage() {
     )
         ? targetChoice
         : (familyInstruments.at(-1)?.symbol ?? "");
+    const targetInstrument = familyInstruments.find(
+        (instrument) => instrument.symbol === targetSymbol,
+    );
 
     const analysis = useMutation({
         mutationFn: async (): Promise<EvidenceBundle> => {
@@ -354,6 +359,10 @@ export function EvidencePage() {
                         ))}
                     </select>
                 </label>
+                <div className="derived-prototype" aria-label="原型指數">
+                    原型指數 {targetInstrument?.prototype_symbol ?? "—"}
+                    <small>由分析標的自動帶入</small>
+                </div>
                 <label>
                     <span>分析標的</span>
                     <select

@@ -7,6 +7,7 @@ import { MemoryRouter } from "../src/lib/router";
 import type {
     DataHealthResponse,
     InstrumentListResponse,
+    MarketSeriesResponse,
     MarketOverviewResponse,
 } from "../src/lib/contracts";
 import {
@@ -105,6 +106,79 @@ function renderPath(
 }
 
 describe("market overview route", () => {
+    it("presents each research family as a direct chart entry", async () => {
+        renderPath("/", apiWith());
+
+        expect(await screen.findByRole("heading", { name: "市場總覽" })).toBeVisible();
+        const entry = screen.getByRole("link", { name: /NASDAQ-100.*QQQ/i });
+        expect(entry).toHaveAttribute("href", "/?family=nasdaq-100&instrument=QQQ");
+        expect(screen.queryByText(/Drawdown depth ledger/i)).not.toBeInTheDocument();
+    });
+
+    it("loads the selected ETF chart with an issuance-date default and prototype ATH distance", async () => {
+        const series: MarketSeriesResponse = {
+            schema_version: "1.0",
+            family_id: "nasdaq-100",
+            target_symbol: "TQQQ",
+            prototype_symbol: "^NDX",
+            prototype_source: "benchmark",
+            handoff_session: "2010-02-11",
+            source_label: "trusted_local_cache",
+            prototype: {
+                symbol: "^NDX",
+                source_kind: "actual",
+                unit: "index",
+                leverage: 1,
+                currency: "USD",
+                actual_last_session: "2026-06-30",
+                policy_cutoff: "2026-06-30",
+                points: [
+                    { session: "2010-01-01", open: 90, high: 100, low: 80, close: 100, normalized_total_return: 100, total_return_close: 100, drawdown: 0 },
+                    { session: "2026-06-30", open: 190, high: 200, low: 180, close: 200, normalized_total_return: 200, total_return_close: 200, drawdown: 0 },
+                ],
+            },
+            actual: {
+                symbol: "TQQQ",
+                source_kind: "actual",
+                unit: "price",
+                leverage: 3,
+                currency: "USD",
+                actual_last_session: "2026-06-30",
+                policy_cutoff: "2026-06-30",
+                points: [
+                    { session: "2010-02-11", open: 9, high: 10, low: 8, close: 10, normalized_total_return: 100, total_return_close: 10, drawdown: 0 },
+                    { session: "2026-06-30", open: 49, high: 50, low: 48, close: 50, normalized_total_return: 500, total_return_close: 50, drawdown: 0 },
+                ],
+            },
+            synthetic: null,
+        };
+        const api = apiWith();
+        api.getMarketSeries = vi.fn().mockResolvedValue(series);
+
+        renderPath("/?family=nasdaq-100&instrument=TQQQ", api);
+
+        expect(await screen.findByRole("heading", { name: "TQQQ 走勢" })).toBeVisible();
+        expect(await screen.findByLabelText("圖表起始模式")).toHaveValue("inception");
+        expect(screen.getByText(/目前 ETF 價格/)).toBeVisible();
+    });
+
+    it("passes the selected history mode and custom dates to the series API", async () => {
+        const api = apiWith();
+        api.getMarketSeries = vi.fn(api.getMarketSeries);
+        renderPath(
+            "/?family=nasdaq-100&instrument=TQQQ&mode=custom&start=2020-01-01&end=2021-01-01",
+            api,
+        );
+        await screen.findByRole("heading", { name: "TQQQ 走勢" });
+        expect(api.getMarketSeries).toHaveBeenCalledWith(
+            expect.objectContaining({
+                history_mode: "custom",
+                start: "2020-01-01",
+                end: "2021-01-01",
+            }),
+        );
+    });
+
     it("summarizes the real API overview contract", async () => {
         renderPath("/", apiWith());
 

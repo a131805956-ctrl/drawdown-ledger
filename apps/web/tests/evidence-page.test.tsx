@@ -197,6 +197,19 @@ function researchApi() {
 }
 
 describe("historical evidence workbench", () => {
+    it("derives the prototype from the selected target and keeps it read-only", async () => {
+        render(
+            <MemoryRouter initialEntries={["/evidence"]}>
+                <App api={researchApi()} capability={{ mode: "live" }} />
+            </MemoryRouter>,
+        );
+
+        expect(await screen.findByText("原型指數 ^NDX")).toBeVisible();
+        expect(
+            screen.queryByRole("combobox", { name: "原型指數" }),
+        ).not.toBeInTheDocument();
+    });
+
     it("separates overlapping days from independent episodes and states the actionable result", async () => {
         const user = userEvent.setup();
         const api = researchApi();

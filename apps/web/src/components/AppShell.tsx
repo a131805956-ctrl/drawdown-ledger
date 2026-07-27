@@ -2,6 +2,7 @@ import { NavLink, Outlet } from "../lib/router";
 
 import { DataStatus } from "./DataStatus";
 import { InstrumentRail } from "./InstrumentRail";
+import { useMiddleWheelInputs } from "./MiddleWheelInput";
 
 const destinations = [
     { to: "/", label: "市場總覽", shortLabel: "總覽", mark: "OV" },
@@ -28,6 +29,7 @@ const destinations = [
 ] as const;
 
 export function AppShell() {
+    useMiddleWheelInputs();
     return (
         <div className="app-shell">
             <a
