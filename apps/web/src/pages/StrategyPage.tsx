@@ -1,8 +1,9 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     useMemo,
     useState,
     type FormEvent,
+    type WheelEvent,
 } from "react";
 
 import {
@@ -181,8 +182,27 @@ function benchmarkReturn(series: MarketSeriesResponse): number | null {
     return last.total_return_close / first.total_return_close - 1;
 }
 
+function stepNumericInput(event: WheelEvent<HTMLFormElement>): void {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || input.type !== "number" || input.readOnly) {
+        return;
+    }
+    event.preventDefault();
+    const current = Number(input.value || 0);
+    const step = Number(input.step) || 1;
+    const minimum = input.min.length > 0 ? Number(input.min) : Number.NEGATIVE_INFINITY;
+    const maximum = input.max.length > 0 ? Number(input.max) : Number.POSITIVE_INFINITY;
+    const next = Math.min(
+        maximum,
+        Math.max(minimum, current + (event.deltaY < 0 ? step : -step)),
+    );
+    input.value = String(next);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 export function StrategyPage() {
     const { api, capability } = useResearchData();
+    const queryClient = useQueryClient();
     const [parameters] = useSearchParams();
     const [familyId, setFamilyId] = useState(
         parameters.get("family") ?? "nasdaq-100",
@@ -191,8 +211,11 @@ export function StrategyPage() {
     const [start, setStart] = useState("2011-01-03");
     const [end, setEnd] = useState(priorCalendarMonthEnd);
     const [initialCash, setInitialCash] = useState("10000");
+    const [initialInvestment, setInitialInvestment] = useState("0");
     const [monthlyContribution, setMonthlyContribution] =
         useState("1000");
+    const [monthlyInvestPercent, setMonthlyInvestPercent] =
+        useState("0");
     const [annualGrowthPercent, setAnnualGrowthPercent] =
         useState("3");
     const [cashInterestPercent, setCashInterestPercent] =
@@ -205,7 +228,7 @@ export function StrategyPage() {
     const [nextDraftId, setNextDraftId] = useState(10);
     const instrumentsQuery = useQuery({
         queryKey: ["instruments"],
-        queryFn: api.getInstruments,
+        queryFn: () => api.getInstruments(),
     });
     const instruments = instrumentsQuery.data?.instruments;
     const familyIds = useMemo(
@@ -233,6 +256,16 @@ export function StrategyPage() {
 
     const backtest = useMutation({
         mutationFn: async (): Promise<StrategyBundle> => {
+            const series = await api.getMarketSeries({
+                family_id: familyId,
+                target_symbol: targetSymbol,
+                include_synthetic: true,
+                max_points: 15_000,
+                start,
+                end,
+            });
+            const openingPrice = series.actual.points.at(0)?.close ?? 0;
+            const startingInvestment = Number(initialInvestment);
             const request: StrategyBacktestRequest = {
                 schema_version: "1.0",
                 name: "現金庫門檻策略",
@@ -241,8 +274,17 @@ export function StrategyPage() {
                 start,
                 end,
                 initial_cash: initialCash,
-                initial_shares: "0",
+                initial_shares:
+                    openingPrice > 0 && startingInvestment > 0
+                        ? (startingInvestment / openingPrice).toFixed(8)
+                        : "0",
                 monthly_contribution: monthlyContribution,
+                monthly_invest_fraction:
+                    decimalPercent(monthlyInvestPercent),
+                monthly_cash_reserve_fraction:
+                    decimalPercent(
+                        String(Math.max(0, 100 - Number(monthlyInvestPercent || 0))),
+                    ),
                 annual_contribution_growth:
                     decimalPercent(annualGrowthPercent),
                 contribution_day: Number(contributionDay),
@@ -258,18 +300,11 @@ export function StrategyPage() {
                     cash_fraction: decimalPercent(tier.cashPercent),
                 })),
             };
-            const [result, series] = await Promise.all([
-                api.backtestStrategy(request),
-                api.getMarketSeries({
-                    family_id: familyId,
-                    target_symbol: targetSymbol,
-                    include_synthetic: true,
-                    max_points: 5_000,
-                    start,
-                    end,
-                }),
-            ]);
+            const result = await api.backtestStrategy(request);
             return { result, series };
+        },
+        onSuccess: (bundle) => {
+            queryClient.setQueryData(["strategy-latest"], bundle);
         },
     });
 
@@ -344,6 +379,7 @@ export function StrategyPage() {
                 className="strategy-form"
                 autoComplete="off"
                 onSubmit={submit}
+                onWheel={stepNumericInput}
             >
                 <section
                     className="form-section"
@@ -464,6 +500,25 @@ export function StrategyPage() {
                             />
                         </label>
                         <label>
+                            <span>起始立即投入金額</span>
+                            <input
+                                id="strategy-initial-investment"
+                                name="initial_investment"
+                                data-testid="strategy-initial-investment"
+                                data-ai-field="initial_investment"
+                                type="number"
+                                min="0"
+                                step="100"
+                                required
+                                value={initialInvestment}
+                                onChange={(event) =>
+                                    setInitialInvestment(
+                                        event.currentTarget.value,
+                                    )
+                                }
+                            />
+                        </label>
+                        <label>
                             <span>每月存入現金庫</span>
                             <input
                                 id="strategy-monthly-contribution"
@@ -481,6 +536,51 @@ export function StrategyPage() {
                                     )
                                 }
                             />
+                        </label>
+                        <label>
+                            <span>每月立即投入比例</span>
+                            <span className="input-suffix">
+                                <input
+                                    id="strategy-monthly-invest-percent"
+                                    name="monthly_invest_percent"
+                                    data-testid="strategy-monthly-invest-percent"
+                                    data-ai-field="monthly_invest_percent"
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    step="1"
+                                    required
+                                    value={monthlyInvestPercent}
+                                    onChange={(event) =>
+                                        setMonthlyInvestPercent(
+                                            event.currentTarget.value,
+                                        )
+                                    }
+                                />
+                                <b>%</b>
+                            </span>
+                        </label>
+                        <label>
+                            <span>每月入庫比例（自動）</span>
+                            <span className="input-suffix">
+                                <input
+                                    id="strategy-monthly-reserve-percent"
+                                    name="monthly_reserve_percent"
+                                    data-testid="strategy-monthly-reserve-percent"
+                                    data-ai-field="monthly_reserve_percent"
+                                    type="number"
+                                    readOnly
+                                    value={Math.max(
+                                        0,
+                                        100 - Number(monthlyInvestPercent || 0),
+                                    )}
+                                    aria-describedby="monthly-reserve-note"
+                                />
+                                <b>%</b>
+                            </span>
+                            <small id="monthly-reserve-note">
+                                未立即投入的資金留在現金庫，仍會等待階梯條件。
+                            </small>
                         </label>
                         <label>
                             <span>每年投入成長</span>
@@ -833,8 +933,16 @@ export function StrategyPage() {
                     </span>
                 </div>
             ) : null}
-            {backtest.data === undefined ? null : (
-                <StrategyResult bundle={backtest.data} tiers={tiers} />
+            {(backtest.data ??
+                queryClient.getQueryData<StrategyBundle>(["strategy-latest"])) ===
+            undefined ? null : (
+                <StrategyResult
+                    bundle={
+                        backtest.data ??
+                        queryClient.getQueryData<StrategyBundle>(["strategy-latest"])!
+                    }
+                    tiers={tiers}
+                />
             )}
         </section>
     );
@@ -915,6 +1023,18 @@ function StrategyResult({
                     累積投入
                     <strong>
                         {money(result.contribution_total, currency)}
+                    </strong>
+                </span>
+                <span>
+                    每月立即投入
+                    <strong>
+                        {money(result.invested_contribution_total, currency)}
+                    </strong>
+                </span>
+                <span>
+                    每月入庫
+                    <strong>
+                        {money(result.reserved_contribution_total, currency)}
                     </strong>
                 </span>
                 <span>

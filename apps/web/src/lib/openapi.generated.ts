@@ -184,6 +184,11 @@ export interface components {
             "actual": components["schemas"]["ChartSeriesResponse"];
             "family_id": string;
             "handoff_session": string | null;
+            "history_end"?: string | null;
+            "history_mode"?: "target_inception" | "prototype_earliest" | "custom";
+            "history_start"?: string | null;
+            "join_session"?: string | null;
+            "model_assumptions"?: components["schemas"]["ModelAssumptionsResponse"] | null;
             "prototype": components["schemas"]["ChartSeriesResponse"];
             "prototype_source": "benchmark" | "proxy";
             "prototype_symbol": string;
@@ -191,6 +196,17 @@ export interface components {
             "source_label"?: "trusted_local_cache";
             "synthetic": components["schemas"]["ChartSeriesResponse"] | null;
             "target_symbol": string;
+        };
+        "ModelAssumptionsResponse": {
+            "annual_management_fee": number;
+            "daily_financing_drag": number;
+            "daily_roll_drag": number;
+            "daily_transaction_drag": number;
+            "initial_nav": number;
+            "join_scale"?: number | null;
+            "leverage": number;
+            "method": "daily_rebalance";
+            "sessions_per_year": number;
         };
         "OptimizationAcceptedResponse": {
             "job_id": string;
@@ -272,9 +288,13 @@ export interface components {
         };
         "PortfolioPointResponse": {
             "cash": string;
+            "cash_pool_balance": string;
+            "cash_pool_inflow": string;
             "close": string;
             "date": string;
+            "external_contribution": string;
             "external_flow": string;
+            "immediate_investment": string;
             "net_contributions": string;
             "profit_loss": string;
             "shares": string;
@@ -398,7 +418,9 @@ export interface components {
             "fixed_fee"?: number | string;
             "initial_cash": number | string;
             "initial_shares"?: number | string;
+            "monthly_cash_reserve_fraction"?: number | string | null;
             "monthly_contribution"?: number | string;
+            "monthly_invest_fraction"?: number | string;
             "name"?: string;
             "schema_version"?: "1.0";
             "slippage"?: number | string;
@@ -414,6 +436,7 @@ export interface components {
             "equity_curve": Array<components["schemas"]["PortfolioPointResponse"]>;
             "family_id": string;
             "interest_income": string;
+            "invested_contribution_total": string;
             "metrics": components["schemas"]["PerformanceResponse"] | null;
             "missed_thresholds": Array<string>;
             "name": string;
@@ -422,6 +445,7 @@ export interface components {
             "prototype_policy_cutoff": string | null;
             "prototype_source": "benchmark" | "proxy";
             "prototype_symbol": string;
+            "reserved_contribution_total": string;
             "schema_version"?: "1.0";
             "source_kind"?: "actual";
             "source_label"?: "trusted_local_cache";
@@ -602,9 +626,14 @@ export interface paths {
             get: {
                 parameters: {
                 "query": {
-                        "annual_expense_ratio"?: number;
+                        "annual_expense_ratio"?: number | null;
+                        "annual_management_fee"?: number | null;
+                        "daily_financing_drag"?: number | null;
+                        "daily_roll_drag"?: number | null;
+                        "daily_transaction_drag"?: number | null;
                         "end"?: string | null;
                         "family_id": string;
+                        "history_mode"?: "target_inception" | "prototype_earliest" | "custom";
                         "include_synthetic"?: boolean;
                         "max_points"?: number;
                         "start"?: string | null;

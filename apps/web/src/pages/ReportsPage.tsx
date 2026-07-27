@@ -2,8 +2,10 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
 import { RouteState } from "../components/RouteState";
-import { useResearchData } from "../lib/api";
+import { ResearchChart, type ResearchChartModel } from "../features/chart/ResearchChart";
+import { useResearchData, type ResearchApi } from "../lib/api";
 import type {
+    MarketSeriesResponse,
     ReportExportRequest,
     ReportExportResponse,
     ReportResponse,
@@ -95,9 +97,28 @@ function bestCandidate(result: ResultResponse) {
     )[0] ?? null;
 }
 
+function reportChartModel(series: MarketSeriesResponse): ResearchChartModel {
+    const convert = (source: typeof series.actual) => ({
+        symbol: source.symbol,
+        sourceKind: source.source_kind,
+        points: source.points.map((point) => ({
+            session: point.session,
+            close: point.close,
+            totalReturnClose: point.total_return_close,
+            drawdown: point.drawdown,
+        })),
+    });
+    return {
+        prototype: convert(series.prototype),
+        actual: convert(series.actual),
+        synthetic: series.synthetic === null ? null : convert(series.synthetic),
+    };
+}
+
 export function ReportsPage() {
     const { api, capability } = useResearchData();
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    const [expandedResultId, setExpandedResultId] = useState<string | null>(null);
     const [exportResultId, setExportResultId] = useState("");
     const [selectedFormats, setSelectedFormats] =
         useState<ReportFormat[]>([...reportFormats]);
@@ -220,12 +241,26 @@ export function ReportsPage() {
                                         selectedIds.length >= 4 &&
                                         !selectedIds.includes(result.id)
                                     }
+                                    expanded={expandedResultId === result.id}
                                     onToggle={(checked) =>
                                         toggle(result.id, checked)
+                                    }
+                                    onOpen={() =>
+                                        setExpandedResultId((current) =>
+                                            current === result.id ? null : result.id,
+                                        )
                                     }
                                 />
                             ))}
                         </div>
+                        {expandedResultId === null ? null : (() => {
+                            const expanded = results.find(
+                                (result) => result.id === expandedResultId,
+                            );
+                            return expanded === undefined ? null : (
+                                <ResultDetail result={expanded} api={api} />
+                            );
+                        })()}
                     </section>
                     {selected.length === 0 ? (
                         <p className="comparison-prompt">
@@ -403,16 +438,98 @@ function ReportExportPanel({
     );
 }
 
+function ResultDetail({
+    result,
+    api,
+}: {
+    result: ResultResponse;
+    api: ResearchApi;
+}) {
+    if (!isOptimizationResult(result)) {
+        return (
+            <section className="result-detail" aria-label={`${result.id} 唯讀詳情`}>
+                <p>此結果為舊版格式，沒有可重建的策略曲線。</p>
+            </section>
+        );
+    }
+    const provenance = result.payload.provenance;
+    // All persisted results use one immutable payload shape for the detail panel.
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const seriesQuery = useQuery({
+        queryKey: ["report-detail-series", result.id, provenance.target_symbol],
+        queryFn: () => api.getMarketSeries({
+            family_id: provenance.family_id,
+            target_symbol: provenance.target_symbol,
+            include_synthetic: true,
+            max_points: 15_000,
+            start: provenance.strategy_start,
+            end: provenance.strategy_end,
+        }),
+    });
+    const best = bestCandidate(result);
+    return (
+        <section className="result-detail" aria-label={`${result.id} 唯讀詳情`}>
+            <div className="result-detail__heading">
+                <div>
+                    <p className="eyebrow">Read-only result dossier</p>
+                    <h3>{result.id} · {provenance.target_symbol}</h3>
+                </div>
+                <span>{provenance.strategy_start} → {provenance.strategy_end}</span>
+            </div>
+            <div className="result-detail__facts">
+                <span>獨立事件<strong>{result.payload.independent_episode_count}</strong></span>
+                <span>模式<strong>{result.payload.mode}</strong></span>
+                <span>資料來源<strong>{provenance.source_kind} / {provenance.prototype_symbol}</strong></span>
+                <span>最佳穩定 XIRR<strong>{best === null ? "—" : percent(best.stability_adjusted_xirr)}</strong></span>
+            </div>
+            <div className="result-detail__ratios">
+                {result.payload.recommendations.map((item) => (
+                    <article key={item.profile}>
+                        <span>{item.profile}</span>
+                        <strong>{ratioLine(item.ratios)}</strong>
+                        <small>OOS {percent(item.oos_xirr)} · 穩定 {percent(item.stability_adjusted_xirr)}</small>
+                    </article>
+                ))}
+            </div>
+            {seriesQuery.isPending ? <p className="form-empty">載入實體 K 線資料…</p> : null}
+            {seriesQuery.isError ? (
+                <p className="inline-alert" role="alert">此結果的實體 K 線暫時無法載入，統計與參數仍可唯讀檢視。</p>
+            ) : null}
+            {seriesQuery.data === undefined ? null : <ResearchChart model={reportChartModel(seriesQuery.data)} height={460} />}
+            <div className="data-table-wrap result-detail__candidate-table">
+                <table aria-label={`${result.id} 候選方案明細`}>
+                    <caption>候選比例與穩定性明細（唯讀）</caption>
+                    <thead><tr><th>比例</th><th>OOS XIRR</th><th>穩定分數</th><th>最差 5%</th><th>早期耗盡率</th><th>最長套牢</th></tr></thead>
+                    <tbody>{result.payload.candidates.map((candidate) => (
+                        <tr key={candidate.ratios.join("-")}>
+                            <td>{ratioLine(candidate.ratios)}</td>
+                            <td>{percent(candidate.oos_xirr)}</td>
+                            <td>{candidate.stability_score.toFixed(2)}</td>
+                            <td>{percent(candidate.worst_5_return)}</td>
+                            <td>{percent(candidate.early_depletion_rate)}</td>
+                            <td>{candidate.longest_trap_days} 天</td>
+                        </tr>
+                    ))}</tbody>
+                </table>
+            </div>
+        </section>
+    );
+}
+
 function ResultChoice({
     result,
     selected,
     disabled,
+    expanded,
     onToggle,
+    onOpen,
 }: {
     result: ResultResponse;
     selected: boolean;
     disabled: boolean;
+    expanded: boolean;
     onToggle: (checked: boolean) => void;
+    onOpen: () => void;
 }) {
     const target = isOptimizationResult(result)
         ? result.payload.provenance.target_symbol
@@ -442,6 +559,19 @@ function ResultChoice({
                 {mode} · {episodes === null ? "—" : `${String(episodes)} events`}
             </small>
             <time>{localDate(result.created_at)}</time>
+            <button
+                type="button"
+                className="result-choice__detail"
+                aria-label={`${result.id} 開啟完整詳情`}
+                aria-expanded={expanded}
+                onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpen();
+                }}
+            >
+                {expanded ? "收合詳情" : "開啟完整詳情"}
+            </button>
         </label>
     );
 }

@@ -120,6 +120,8 @@ const strategyResult: StrategyBacktestResponse = {
     source_kind: "actual",
     source_label: "trusted_local_cache",
     contribution_total: "80000",
+    invested_contribution_total: "20000",
+    reserved_contribution_total: "60000",
     dividend_income: "3200",
     interest_income: "1700",
     ending_cash: "12400",
@@ -145,6 +147,10 @@ const strategyResult: StrategyBacktestResponse = {
             cash: "10000",
             value: "10000",
             external_flow: "10000",
+            external_contribution: "10000",
+            cash_pool_inflow: "10000",
+            immediate_investment: "0",
+            cash_pool_balance: "10000",
             net_contributions: "10000",
             profit_loss: "0",
         },
@@ -155,6 +161,10 @@ const strategyResult: StrategyBacktestResponse = {
             cash: "5000",
             value: "10250",
             external_flow: "0",
+            external_contribution: "0",
+            cash_pool_inflow: "0",
+            immediate_investment: "0",
+            cash_pool_balance: "5000",
             net_contributions: "10000",
             profit_loss: "250",
         },
@@ -269,6 +279,30 @@ describe("cash-pool strategy laboratory", () => {
                     { depth: "0.30", cash_fraction: "0.35" },
                     { depth: "0.40", cash_fraction: "0.40" },
                 ],
+            }),
+        );
+    });
+
+    it("exposes starting investment and monthly allocation controls and maps starting investment to shares", async () => {
+        const user = userEvent.setup();
+        const api = strategyApi();
+        render(
+            <MemoryRouter initialEntries={["/strategy"]}>
+                <App api={api} capability={{ mode: "live" }} />
+            </MemoryRouter>,
+        );
+
+        expect(screen.getByTestId("strategy-initial-investment")).toBeVisible();
+        expect(screen.getByTestId("strategy-monthly-invest-percent")).toBeVisible();
+        expect(screen.getByTestId("strategy-monthly-reserve-percent")).toBeVisible();
+        await user.clear(screen.getByTestId("strategy-initial-investment"));
+        await user.type(screen.getByTestId("strategy-initial-investment"), "2500");
+        await user.click(screen.getByRole("button", { name: /執行現金庫回測/ }));
+
+        expect(api.backtestStrategy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                initial_cash: "10000",
+                initial_shares: "50.00000000",
             }),
         );
     });

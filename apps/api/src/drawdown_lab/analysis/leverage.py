@@ -12,11 +12,48 @@ SourceKind = Literal["actual", "synthetic"]
 
 
 @dataclass(frozen=True, slots=True)
+class SyntheticModelAssumptions:
+    """Reproducible assumptions used to construct a synthetic ETF path."""
+
+    method: Literal["daily_rebalance"]
+    leverage: float
+    initial_nav: float
+    annual_management_fee: float
+    daily_financing_drag: float
+    daily_roll_drag: float
+    daily_transaction_drag: float
+    sessions_per_year: int
+
+
+def default_synthetic_model_parameters(
+    leverage: float,
+) -> tuple[float, float, float, float]:
+    """Return conservative, transparent defaults for a leveraged ETF proxy.
+
+    The values are deliberately modest approximations rather than a claim
+    about a particular fund's prospectus: management is annualized at 0.95%,
+    while financing, roll and rebalancing friction scale with leverage on a
+    daily basis.  Callers can override every value explicitly.
+    """
+
+    if leverage <= 1.0:
+        return (0.0, 0.0, 0.0, 0.0)
+    scale = leverage
+    return (
+        0.0095,
+        0.00003 * scale,
+        0.00001 * scale,
+        0.000005 * scale,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class SyntheticSeries:
     nav: pd.Series
     leverage: float
     initial_nav: float
     annual_expense_ratio: float
+    assumptions: SyntheticModelAssumptions
     unit: Literal["index"] = "index"
     source_kind: Literal["synthetic"] = "synthetic"
 
@@ -57,22 +94,50 @@ def synthetic_daily_reset_nav(
     *,
     initial_nav: float = 100.0,
     annual_expense_ratio: float = 0.0,
+    annual_management_fee: float | None = None,
+    daily_financing_drag: float = 0.0,
+    daily_roll_drag: float = 0.0,
+    daily_transaction_drag: float = 0.0,
     sessions_per_year: int = 252,
 ) -> SyntheticSeries:
-    """Build an index-unit stress path with leverage reset after every session."""
+    """Build an index-unit path with daily leverage reset and explicit drags.
+
+    ``annual_expense_ratio`` remains a compatibility alias for the new
+    ``annual_management_fee`` parameter.  Daily financing, roll and
+    transaction costs are modeled as additive return drags on every session;
+    this keeps the assumptions transparent and prevents a long synthetic
+    history from silently assuming a frictionless leveraged product.
+    """
 
     validate_market_frame(prototype)
     if leverage <= 0.0:
         raise ValueError("Leverage must be positive")
     if initial_nav <= 0.0:
         raise ValueError("Initial NAV must be positive")
-    if annual_expense_ratio < 0.0:
-        raise ValueError("Annual expense ratio cannot be negative")
+    management_fee = (
+        annual_expense_ratio
+        if annual_management_fee is None
+        else annual_management_fee
+    )
+    if management_fee < 0.0:
+        raise ValueError("Annual management fee cannot be negative")
+    for name, value in (
+        ("daily financing drag", daily_financing_drag),
+        ("daily roll drag", daily_roll_drag),
+        ("daily transaction drag", daily_transaction_drag),
+    ):
+        if value < 0.0:
+            raise ValueError(f"{name.capitalize()} cannot be negative")
     if sessions_per_year <= 0:
         raise ValueError("Sessions per year must be positive")
 
     returns = prototype.data["price_close"].astype(float).pct_change()
-    daily_fee = annual_expense_ratio / sessions_per_year
+    daily_fee = (
+        management_fee / sessions_per_year
+        + daily_financing_drag
+        + daily_roll_drag
+        + daily_transaction_drag
+    )
     values = [initial_nav]
     for daily_return in returns.iloc[1:]:
         net_return = leverage * float(daily_return) - daily_fee
@@ -87,7 +152,17 @@ def synthetic_daily_reset_nav(
         nav=nav,
         leverage=leverage,
         initial_nav=initial_nav,
-        annual_expense_ratio=annual_expense_ratio,
+        annual_expense_ratio=management_fee,
+        assumptions=SyntheticModelAssumptions(
+            method="daily_rebalance",
+            leverage=leverage,
+            initial_nav=initial_nav,
+            annual_management_fee=management_fee,
+            daily_financing_drag=daily_financing_drag,
+            daily_roll_drag=daily_roll_drag,
+            daily_transaction_drag=daily_transaction_drag,
+            sessions_per_year=sessions_per_year,
+        ),
     )
 
 

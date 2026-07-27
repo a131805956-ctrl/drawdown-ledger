@@ -132,6 +132,18 @@ class ChartSeriesResponse(ApiModel):
     points: tuple[ChartPointResponse, ...]
 
 
+class ModelAssumptionsResponse(ApiModel):
+    method: Literal["daily_rebalance"]
+    leverage: float
+    initial_nav: float
+    annual_management_fee: float
+    daily_financing_drag: float
+    daily_roll_drag: float
+    daily_transaction_drag: float
+    sessions_per_year: int
+    join_scale: float | None = None
+
+
 class MarketSeriesResponse(VersionedModel):
     family_id: str
     prototype_symbol: str
@@ -139,6 +151,13 @@ class MarketSeriesResponse(VersionedModel):
     target_symbol: str
     source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
     handoff_session: date | None
+    history_mode: Literal["target_inception", "prototype_earliest", "custom"] = (
+        "target_inception"
+    )
+    history_start: date | None = None
+    history_end: date | None = None
+    join_session: date | None = None
+    model_assumptions: ModelAssumptionsResponse | None = None
     prototype: ChartSeriesResponse
     actual: ChartSeriesResponse
     synthetic: ChartSeriesResponse | None
@@ -303,6 +322,8 @@ class StrategyBacktestRequest(VersionedModel):
     initial_shares: NonNegativeDecimal = Decimal("0")
     tiers: tuple[StrategyTierInput, ...] = Field(min_length=1)
     monthly_contribution: NonNegativeDecimal = Decimal("0")
+    monthly_invest_fraction: UnitDecimal = Decimal("0")
+    monthly_cash_reserve_fraction: UnitDecimal | None = None
     annual_contribution_growth: ContributionGrowth = Decimal("0")
     contribution_day: int = Field(default=1, ge=1, le=31)
     contribution_events: tuple[ContributionEventInput, ...] = ()
@@ -320,6 +341,12 @@ class StrategyBacktestRequest(VersionedModel):
         depths = tuple(tier.depth for tier in self.tiers)
         if len(set(depths)) != len(depths):
             raise ValueError("Tier depths must be unique")
+        if self.monthly_cash_reserve_fraction is not None and (
+            self.monthly_invest_fraction + self.monthly_cash_reserve_fraction != Decimal("1")
+        ):
+            raise ValueError(
+                "Monthly investment and cash reserve fractions must sum to 1"
+            )
         return self
 
     def to_domain(self) -> StrategyConfig:
@@ -343,6 +370,8 @@ class StrategyBacktestRequest(VersionedModel):
             initial_shares=self.initial_shares,
             tiers=tuple(ThresholdTier(tier.depth, tier.cash_fraction) for tier in self.tiers),
             contributions=contributions,
+            monthly_invest_fraction=self.monthly_invest_fraction,
+            monthly_cash_reserve_fraction=self.monthly_cash_reserve_fraction,
             cash_interest_rate=self.cash_interest_rate,
             dividend_policy=self.dividend_policy,
             fixed_fee=self.fixed_fee,
@@ -387,6 +416,10 @@ class PortfolioPointResponse(ApiModel):
     external_flow: Decimal
     net_contributions: Decimal
     profit_loss: Decimal
+    external_contribution: Decimal
+    cash_pool_inflow: Decimal
+    immediate_investment: Decimal
+    cash_pool_balance: Decimal
 
 
 class StrategyBacktestResponse(VersionedModel):
@@ -406,6 +439,8 @@ class StrategyBacktestResponse(VersionedModel):
     trade_count: int
     dividend_income: Decimal
     contribution_total: Decimal
+    invested_contribution_total: Decimal
+    reserved_contribution_total: Decimal
     interest_income: Decimal
     total_fees: Decimal
     pending_thresholds: tuple[Decimal, ...]

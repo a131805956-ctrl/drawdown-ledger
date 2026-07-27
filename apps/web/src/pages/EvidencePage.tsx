@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     useMemo,
     useState,
@@ -256,11 +256,14 @@ function EpisodeTable({
 
 export function EvidencePage() {
     const { api, capability } = useResearchData();
+    const queryClient = useQueryClient();
     const [searchParameters] = useSearchParams();
     const requestedFamily =
         searchParameters.get("family") ?? "nasdaq-100";
     const [familyId, setFamilyId] = useState(requestedFamily);
-    const [targetChoice, setTargetChoice] = useState("");
+    const [targetChoice, setTargetChoice] = useState(
+        searchParameters.get("instrument") ?? "",
+    );
     const [thresholdPercent, setThresholdPercent] = useState("30");
     const instrumentsQuery = useQuery({
         queryKey: ["instruments"],
@@ -287,6 +290,9 @@ export function EvidencePage() {
     )
         ? targetChoice
         : (familyInstruments.at(-1)?.symbol ?? "");
+    const targetInstrument = familyInstruments.find(
+        (instrument) => instrument.symbol === targetSymbol,
+    );
 
     const analysis = useMutation({
         mutationFn: async (): Promise<EvidenceBundle> => {
@@ -309,6 +315,9 @@ export function EvidencePage() {
                 }),
             ]);
             return { evidence, series };
+        },
+        onSuccess: (bundle) => {
+            queryClient.setQueryData(["evidence-latest"], bundle);
         },
     });
 
@@ -354,6 +363,10 @@ export function EvidencePage() {
                         ))}
                     </select>
                 </label>
+                <div className="derived-prototype" aria-label="原型指數">
+                    原型指數 {targetInstrument?.prototype_symbol ?? "—"}
+                    <small>由分析標的自動帶入</small>
+                </div>
                 <label>
                     <span>分析標的</span>
                     <select
@@ -430,7 +443,9 @@ export function EvidencePage() {
                 </div>
             ) : null}
 
-            {analysis.data === undefined ? (
+            {(analysis.data ??
+                queryClient.getQueryData<EvidenceBundle>(["evidence-latest"])) ===
+            undefined ? (
                 <div className="research-empty">
                     <span aria-hidden="true">EV</span>
                     <div>
@@ -443,7 +458,10 @@ export function EvidencePage() {
                 </div>
             ) : (
                 <EvidenceResult
-                    bundle={analysis.data}
+                    bundle={
+                        analysis.data ??
+                        queryClient.getQueryData<EvidenceBundle>(["evidence-latest"])!
+                    }
                     threshold={selectedThreshold}
                 />
             )}

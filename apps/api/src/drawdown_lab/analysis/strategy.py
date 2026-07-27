@@ -50,6 +50,8 @@ class StrategyConfig:
     name: str = "cash-pool"
     scheduled_initial_months: int = 0
     invest_contributions_immediately: bool = False
+    monthly_invest_fraction: Decimal = Decimal("0")
+    monthly_cash_reserve_fraction: Decimal | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "initial_cash", quantize_money(self.initial_cash))
@@ -59,6 +61,13 @@ class StrategyConfig:
         object.__setattr__(self, "fee_rate", as_decimal(self.fee_rate))
         object.__setattr__(self, "slippage", as_decimal(self.slippage))
         object.__setattr__(self, "dividend_policy", DividendPolicy(self.dividend_policy))
+        invest_fraction = as_decimal(self.monthly_invest_fraction)
+        if self.monthly_cash_reserve_fraction is None:
+            reserve_fraction = Decimal("1") - invest_fraction
+        else:
+            reserve_fraction = as_decimal(self.monthly_cash_reserve_fraction)
+        object.__setattr__(self, "monthly_invest_fraction", invest_fraction)
+        object.__setattr__(self, "monthly_cash_reserve_fraction", reserve_fraction)
         object.__setattr__(self, "tiers", tuple(sorted(self.tiers, key=lambda tier: tier.depth)))
         if self.initial_cash < 0 or self.initial_shares < 0:
             raise ValueError("Initial cash and shares must be non-negative")
@@ -70,6 +79,12 @@ class StrategyConfig:
             raise ValueError("Cash interest rate must be non-negative")
         if self.scheduled_initial_months < 0:
             raise ValueError("Scheduled initial months must be non-negative")
+        if not Decimal("0") <= invest_fraction <= Decimal("1"):
+            raise ValueError("Monthly investment fraction must be between 0 and 1")
+        if not Decimal("0") <= reserve_fraction <= Decimal("1"):
+            raise ValueError("Monthly cash reserve fraction must be between 0 and 1")
+        if invest_fraction + reserve_fraction != Decimal("1"):
+            raise ValueError("Monthly investment and cash reserve fractions must sum to 1")
         depths = tuple(tier.depth for tier in self.tiers)
         if len(depths) != len(set(depths)):
             raise ValueError("Tier depths must be unique")
@@ -100,6 +115,10 @@ class PortfolioPoint:
     close: Decimal
     value: Money
     external_flow: Money = Decimal("0.00")
+    external_contribution: Money = Decimal("0.00")
+    cash_pool_inflow: Money = Decimal("0.00")
+    immediate_investment: Money = Decimal("0.00")
+    cash_pool_balance: Money = Decimal("0.00")
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +137,8 @@ class StrategyResult:
     pending_thresholds: tuple[Decimal, ...] = ()
     missed_thresholds: tuple[Decimal, ...] = ()
     metrics: PerformanceMetrics | None = None
+    invested_contribution_total: Money = Decimal("0.00")
+    reserved_contribution_total: Money = Decimal("0.00")
 
     @property
     def cash(self) -> Money:
@@ -208,6 +229,8 @@ def simulate_strategy(
     net_contributions = opening_value
     dividend_income = Decimal("0.00")
     contribution_total = Decimal("0.00")
+    invested_contribution_total = Decimal("0.00")
+    reserved_contribution_total = Decimal("0.00")
     interest_income = Decimal("0.00")
     total_fees = Decimal("0.00")
     trades: list[Trade] = []
@@ -246,6 +269,9 @@ def simulate_strategy(
         if timestamp in traded_data.index:
             row = traded_data.loc[timestamp]
             external_flow_today = Decimal("0.00")
+            external_contribution_today = Decimal("0.00")
+            cash_pool_inflow_today = Decimal("0.00")
+            immediate_investment_today = Decimal("0.00")
             raw_open = row["raw_open"]
             actual_days = (current_date - last_open_date).days
             if actual_days:
@@ -267,13 +293,25 @@ def simulate_strategy(
                 while pending_contributions and pending_contributions[0].date <= current_date:
                     due_contribution = pending_contributions.pop(0)
                     contribution = due_contribution.amount
+                    invest_fraction = (
+                        Decimal("1")
+                        if config.invest_contributions_immediately
+                        and config.monthly_invest_fraction == Decimal("0")
+                        else config.monthly_invest_fraction
+                    )
+                    immediate_amount = quantize_money(contribution * invest_fraction)
+                    reserve_amount = quantize_money(contribution - immediate_amount)
                     cash += contribution
                     contribution_total += contribution
+                    invested_contribution_total += immediate_amount
+                    reserved_contribution_total += reserve_amount
                     external_flow_today += contribution
+                    external_contribution_today += contribution
+                    cash_pool_inflow_today += reserve_amount
                     net_contributions += contribution
                     external_cashflows.append(CashFlow(current_date, -contribution))
-                    if config.invest_contributions_immediately:
-                        passive_pending.append((current_date, contribution, "dca"))
+                    if immediate_amount:
+                        passive_pending.append((current_date, immediate_amount, "dca"))
 
             split_ratio = _decimal(row["split_ratio"])
             if split_ratio != Decimal("1"):
@@ -312,6 +350,8 @@ def simulate_strategy(
                     )
                     shares_bought = pre_fee_notional / execution_price
                     cash -= allocation
+                    if kind == "dca":
+                        immediate_investment_today += allocation
                     shares += shares_bought
                     total_fees += fee
                     trades.append(
@@ -457,6 +497,10 @@ def simulate_strategy(
                     last_close,
                     value,
                     external_flow_today,
+                    external_contribution_today,
+                    cash_pool_inflow_today,
+                    immediate_investment_today,
+                    quantize_money(cash),
                 )
             )
 
@@ -485,5 +529,7 @@ def simulate_strategy(
         external_cashflows=tuple(external_cashflows),
         pending_thresholds=tuple(order.tier.depth for order in pending),
         missed_thresholds=missed,
+        invested_contribution_total=invested_contribution_total,
+        reserved_contribution_total=reserved_contribution_total,
         metrics=metrics,
     )

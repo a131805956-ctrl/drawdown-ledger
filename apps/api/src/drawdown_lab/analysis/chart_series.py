@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Literal, cast
 
@@ -27,6 +27,28 @@ class ChartSeries:
     source_kind: Literal["actual", "synthetic"]
     unit: Literal["price", "index"]
     points: tuple[ChartPoint, ...]
+
+
+def scale_chart_series(series: ChartSeries, factor: float) -> ChartSeries:
+    """Scale a synthetic series into the traded ETF price domain.
+
+    The synthetic index remains explicitly marked as synthetic, while the
+    scale makes its last pre-listing bar join the first actual ETF close.
+    """
+
+    if factor <= 0.0:
+        raise ValueError("Chart-series scale factor must be positive")
+    return replace(
+        series,
+        points=tuple(
+            replace(
+                point,
+                close=point.close * factor,
+                total_return_close=point.total_return_close * factor,
+            )
+            for point in series.points
+        ),
+    )
 
 
 def _date(value: object) -> date:
@@ -84,6 +106,10 @@ def synthetic_chart_series(
     leverage: float,
     *,
     annual_expense_ratio: float = 0.0,
+    annual_management_fee: float | None = None,
+    daily_financing_drag: float = 0.0,
+    daily_roll_drag: float = 0.0,
+    daily_transaction_drag: float = 0.0,
     start: date | None = None,
     end: date | None = None,
 ) -> ChartSeries:
@@ -93,6 +119,10 @@ def synthetic_chart_series(
         prototype,
         leverage,
         annual_expense_ratio=annual_expense_ratio,
+        annual_management_fee=annual_management_fee,
+        daily_financing_drag=daily_financing_drag,
+        daily_roll_drag=daily_roll_drag,
+        daily_transaction_drag=daily_transaction_drag,
     )
     values = synthetic.nav.astype(float)
     frame = pd.DataFrame(index=values.index)
