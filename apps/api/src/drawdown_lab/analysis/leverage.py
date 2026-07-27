@@ -25,6 +25,28 @@ class SyntheticModelAssumptions:
     sessions_per_year: int
 
 
+def default_synthetic_model_parameters(
+    leverage: float,
+) -> tuple[float, float, float, float]:
+    """Return conservative, transparent defaults for a leveraged ETF proxy.
+
+    The values are deliberately modest approximations rather than a claim
+    about a particular fund's prospectus: management is annualized at 0.95%,
+    while financing, roll and rebalancing friction scale with leverage on a
+    daily basis.  Callers can override every value explicitly.
+    """
+
+    if leverage <= 1.0:
+        return (0.0, 0.0, 0.0, 0.0)
+    scale = leverage
+    return (
+        0.0095,
+        0.00003 * scale,
+        0.00001 * scale,
+        0.000005 * scale,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SyntheticSeries:
     nav: pd.Series

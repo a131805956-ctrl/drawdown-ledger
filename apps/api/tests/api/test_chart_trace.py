@@ -129,6 +129,28 @@ def test_market_series_defaults_to_target_etf_inception(tmp_path: Path) -> None:
     assert payload["synthetic"]["points"] == []
 
 
+def test_market_series_uses_nonzero_product_cost_defaults_for_leverage(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path, target_start_offset=10) as client:
+        response = client.get(
+            "/api/v1/market/series",
+            params={
+                "family_id": "nasdaq-100",
+                "target_symbol": "TQQQ",
+                "history_mode": "prototype_earliest",
+                "include_synthetic": "true",
+            },
+        )
+
+    assert response.status_code == 200
+    assumptions = response.json()["model_assumptions"]
+    assert assumptions["annual_management_fee"] > 0
+    assert assumptions["daily_financing_drag"] > 0
+    assert assumptions["daily_roll_drag"] > 0
+    assert assumptions["daily_transaction_drag"] > 0
+
+
 def test_market_series_scaled_synthetic_bridge_matches_actual_join_return(
     tmp_path: Path,
 ) -> None:

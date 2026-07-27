@@ -16,7 +16,10 @@ from drawdown_lab.analysis.chart_series import (
 )
 from drawdown_lab.analysis.episodes import classify_episodes
 from drawdown_lab.analysis.evidence import analyze_evidence
-from drawdown_lab.analysis.leverage import synthetic_daily_reset_nav
+from drawdown_lab.analysis.leverage import (
+    default_synthetic_model_parameters,
+    synthetic_daily_reset_nav,
+)
 from drawdown_lab.analysis.strategy import StrategyResult, simulate_strategy
 from drawdown_lab.api.schemas import (
     ChartPointResponse,
@@ -418,9 +421,9 @@ def create_router(
         include_synthetic: bool = False,
         annual_expense_ratio: float = Query(default=0.0, ge=0.0, le=1.0),
         annual_management_fee: float | None = Query(default=None, ge=0.0, le=1.0),
-        daily_financing_drag: float = Query(default=0.0, ge=0.0, le=1.0),
-        daily_roll_drag: float = Query(default=0.0, ge=0.0, le=1.0),
-        daily_transaction_drag: float = Query(default=0.0, ge=0.0, le=1.0),
+        daily_financing_drag: float | None = Query(default=None, ge=0.0, le=1.0),
+        daily_roll_drag: float | None = Query(default=None, ge=0.0, le=1.0),
+        daily_transaction_drag: float | None = Query(default=None, ge=0.0, le=1.0),
         max_points: int = Query(
             default=MAX_MARKET_SERIES_POINTS,
             ge=1,
@@ -478,10 +481,28 @@ def create_router(
         synthetic_end = handoff_session - timedelta(days=1)
         if end is not None:
             synthetic_end = min(synthetic_end, end)
+        default_management_fee, default_financing, default_roll, default_transaction = (
+            default_synthetic_model_parameters(float(target.leverage))
+        )
         management_fee = (
-            annual_expense_ratio
-            if annual_management_fee is None
-            else annual_management_fee
+            annual_management_fee
+            if annual_management_fee is not None
+            else (
+                annual_expense_ratio
+                if annual_expense_ratio > 0.0
+                else default_management_fee
+            )
+        )
+        financing_drag = (
+            default_financing
+            if daily_financing_drag is None
+            else daily_financing_drag
+        )
+        roll_drag = default_roll if daily_roll_drag is None else daily_roll_drag
+        transaction_drag = (
+            default_transaction
+            if daily_transaction_drag is None
+            else daily_transaction_drag
         )
         synthetic_model = None
         join_scale: float | None = None
@@ -500,9 +521,9 @@ def create_router(
                     MarketFrame(model_data),
                     float(target.leverage),
                     annual_management_fee=management_fee,
-                    daily_financing_drag=daily_financing_drag,
-                    daily_roll_drag=daily_roll_drag,
-                    daily_transaction_drag=daily_transaction_drag,
+                    daily_financing_drag=financing_drag,
+                    daily_roll_drag=roll_drag,
+                    daily_transaction_drag=transaction_drag,
                 )
                 join_timestamp = pd.Timestamp(handoff_session)
                 join_nav = synthetic_model.nav.get(join_timestamp)
@@ -522,9 +543,9 @@ def create_router(
                     MarketFrame(model_data),
                     float(target.leverage),
                     annual_management_fee=management_fee,
-                    daily_financing_drag=daily_financing_drag,
-                    daily_roll_drag=daily_roll_drag,
-                    daily_transaction_drag=daily_transaction_drag,
+                    daily_financing_drag=financing_drag,
+                    daily_roll_drag=roll_drag,
+                    daily_transaction_drag=transaction_drag,
                     start=effective_start,
                     end=synthetic_end,
                 )
