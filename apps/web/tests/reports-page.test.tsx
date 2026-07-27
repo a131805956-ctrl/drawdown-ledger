@@ -6,10 +6,48 @@ import { App } from "../src/app/App";
 import { createStaticResearchApi } from "../src/lib/api";
 import { MemoryRouter } from "../src/lib/router";
 import type {
+    MarketSeriesResponse,
     ReportExportResponse,
     ReportListResponse,
     ResultListResponse,
 } from "../src/lib/contracts";
+
+const detailSeries = {
+    schema_version: "1.0",
+    family_id: "nasdaq-100",
+    target_symbol: "TQQQ",
+    prototype_symbol: "^NDX",
+    prototype_source: "benchmark",
+    handoff_session: null,
+    source_label: "trusted_local_cache",
+    prototype: {
+        symbol: "^NDX",
+        leverage: 1,
+        source_kind: "actual",
+        unit: "index",
+        currency: "USD",
+        actual_last_session: "2026-06-30",
+        policy_cutoff: "2026-06-30",
+        points: [
+            { session: "2020-01-02", open: 100, high: 101, low: 99, close: 100, total_return_close: 100, normalized_total_return: 100, drawdown: 0 },
+            { session: "2020-03-17", open: 70, high: 72, low: 69, close: 71, total_return_close: 71, normalized_total_return: 71, drawdown: -0.29 },
+        ],
+    },
+    actual: {
+        symbol: "TQQQ",
+        leverage: 3,
+        source_kind: "actual",
+        unit: "price",
+        currency: "USD",
+        actual_last_session: "2026-06-30",
+        policy_cutoff: "2026-06-30",
+        points: [
+            { session: "2020-01-02", open: 50, high: 51, low: 49, close: 50, total_return_close: 50, normalized_total_return: 100, drawdown: 0 },
+            { session: "2020-03-17", open: 20, high: 22, low: 19, close: 21, total_return_close: 21, normalized_total_return: 42, drawdown: -0.58 },
+        ],
+    },
+    synthetic: null,
+} as unknown as MarketSeriesResponse;
 
 function optimizationPayload(target: string, ratio: number) {
     return {
@@ -148,7 +186,7 @@ describe("report and comparison ledger", () => {
         expect(
             screen.getByRole("table", { name: "結果並排比較" }),
         ).toHaveTextContent("QLD");
-        expect(screen.getByText("25% / 35% / 40%")).toBeVisible();
+        expect(screen.getAllByText("25% / 35% / 40%").length).toBeGreaterThanOrEqual(1);
         expect(screen.getByText("30% / 35% / 40%")).toBeVisible();
         expect(
             screen.getByRole("table", { name: "已儲存研究報告" }),
@@ -249,5 +287,34 @@ describe("report and comparison ledger", () => {
             ),
         ).toBeVisible();
         expect(screen.getByText(/只建立私人 bundle/)).toBeVisible();
+    });
+
+    it("opens a read-only result detail with chart and candidate evidence", async () => {
+        const user = userEvent.setup();
+        const getMarketSeries = vi.fn().mockResolvedValue(detailSeries);
+        const api = {
+            ...createStaticResearchApi({
+                instruments: { schema_version: "1.0", instruments: [] },
+                overview: { schema_version: "1.0", instrument_count: 0, cached_symbols: [], formal_result_count: 2 },
+                health: { schema_version: "1.0", status: "incomplete", coverage: [] },
+                results,
+                reports,
+            }),
+            getMarketSeries,
+        };
+        render(
+            <MemoryRouter initialEntries={["/reports"]}>
+                <App api={api} capability={{ mode: "live" }} />
+            </MemoryRouter>,
+        );
+
+        await user.click(await screen.findByRole("button", { name: /result-1.*詳情/i }));
+
+        expect(await screen.findByRole("region", { name: /result-1.*唯讀詳情/i })).toBeVisible();
+        expect(screen.getAllByText("25% / 35% / 40%").length).toBeGreaterThanOrEqual(1);
+        expect(screen.getByRole("region", { name: "同步研究線圖" })).toBeVisible();
+        expect(getMarketSeries).toHaveBeenCalledWith(
+            expect.objectContaining({ family_id: "nasdaq-100", target_symbol: "TQQQ" }),
+        );
     });
 });

@@ -273,6 +273,30 @@ describe("cash-pool strategy laboratory", () => {
         );
     });
 
+    it("exposes starting investment and monthly allocation controls and maps starting investment to shares", async () => {
+        const user = userEvent.setup();
+        const api = strategyApi();
+        render(
+            <MemoryRouter initialEntries={["/strategy"]}>
+                <App api={api} capability={{ mode: "live" }} />
+            </MemoryRouter>,
+        );
+
+        expect(screen.getByTestId("strategy-initial-investment")).toBeVisible();
+        expect(screen.getByTestId("strategy-monthly-invest-percent")).toBeVisible();
+        expect(screen.getByTestId("strategy-monthly-reserve-percent")).toBeVisible();
+        await user.clear(screen.getByTestId("strategy-initial-investment"));
+        await user.type(screen.getByTestId("strategy-initial-investment"), "2500");
+        await user.click(screen.getByRole("button", { name: /執行現金庫回測/ }));
+
+        expect(api.backtestStrategy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                initial_cash: "10000",
+                initial_shares: "50.00000000",
+            }),
+        );
+    });
+
     it("shows validation detail returned by the research API", async () => {
         const user = userEvent.setup();
         const api = strategyApi();
