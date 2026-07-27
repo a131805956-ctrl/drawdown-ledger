@@ -64,10 +64,10 @@ def test_market_series_keeps_actual_prices_and_synthetic_index_separate(
     assert payload["synthetic"]["points"][0]["close"] > 0
     assert payload["model_assumptions"]["join_scale"] > 0
     assert payload["handoff_session"] == payload["actual"]["points"][0]["session"]
-    assert payload["synthetic"]["points"][-1]["session"] < payload["handoff_session"]
-    assert {
-        point["session"] for point in payload["synthetic"]["points"]
-    }.isdisjoint(point["session"] for point in payload["actual"]["points"])
+    assert payload["synthetic"]["points"][-1]["session"] == payload["handoff_session"]
+    assert payload["synthetic"]["points"][-1]["close"] == pytest.approx(
+        payload["actual"]["points"][0]["close"]
+    )
     assert payload["prototype"]["points"][9]["drawdown"] < -0.20
     assert payload["prototype"]["policy_cutoff"] == "2020-02-03"
     assert payload["actual"]["actual_last_session"] == "2020-02-03"
@@ -104,7 +104,8 @@ def test_market_series_exposes_joined_daily_rebalance_model_and_history_mode(
     assert assumptions["daily_transaction_drag"] == 0.0003
     synthetic = payload["synthetic"]["points"]
     actual = payload["actual"]["points"]
-    assert synthetic[-1]["session"] < payload["join_session"]
+    assert synthetic[-1]["session"] == payload["join_session"]
+    assert synthetic[-1]["close"] == pytest.approx(actual[0]["close"])
     assert assumptions["join_scale"] > 0
     assert synthetic[-1]["close"] > 0
     assert actual[0]["close"] > 0
@@ -196,11 +197,12 @@ def test_market_series_scaled_synthetic_bridge_matches_actual_join_return(
     )
     actual_points = payload["actual"]["points"]
     synthetic_points = payload["synthetic"]["points"]
-    assert synthetic_points[-1]["session"] == "2020-01-14"
+    assert synthetic_points[-2]["session"] == "2020-01-14"
+    assert synthetic_points[-1]["session"] == "2020-01-15"
     assert actual_points[0]["session"] == "2020-01-15"
     expected_join_ratio = float(model.nav.iloc[10] / model.nav.iloc[9])
     observed_join_ratio = float(
-        actual_points[0]["close"] / synthetic_points[-1]["close"]
+        synthetic_points[-1]["close"] / synthetic_points[-2]["close"]
     )
     assert observed_join_ratio == pytest.approx(expected_join_ratio)
 

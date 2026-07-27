@@ -483,7 +483,15 @@ def create_router(
             start=effective_start,
             end=end,
         )
-        synthetic_end = handoff_session - timedelta(days=1)
+        # Keep one explicit join point on the ETF's first actual session when
+        # the requested history starts before listing.  This makes the
+        # synthetic tail touch the first real candle while retaining the
+        # pre-listing daily bridge.
+        synthetic_end = (
+            handoff_session
+            if effective_start is None or effective_start < handoff_session
+            else handoff_session - timedelta(days=1)
+        )
         if end is not None:
             synthetic_end = min(synthetic_end, end)
         default_management_fee, default_financing, default_roll, default_transaction = (
