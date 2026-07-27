@@ -3,6 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+from drawdown_lab.analysis.leverage import synthetic_daily_reset_nav
 from drawdown_lab.api.app import Settings, create_app
 from drawdown_lab.data.catalog import DataCatalog
 from drawdown_lab.data.models import MarketFrame
@@ -41,6 +43,7 @@ def test_market_series_keeps_actual_prices_and_synthetic_index_separate(
             params={
                 "family_id": "nasdaq-100",
                 "target_symbol": "TQQQ",
+                "history_mode": "prototype_earliest",
                 "include_synthetic": "true",
             },
         )
@@ -58,7 +61,8 @@ def test_market_series_keeps_actual_prices_and_synthetic_index_separate(
     assert payload["synthetic"]["source_kind"] == "synthetic"
     assert payload["synthetic"]["unit"] == "index"
     assert payload["synthetic"]["leverage"] == 3.0
-    assert payload["synthetic"]["points"][0]["close"] == 100.0
+    assert payload["synthetic"]["points"][0]["close"] > 0
+    assert payload["model_assumptions"]["join_scale"] > 0
     assert payload["handoff_session"] == payload["actual"]["points"][0]["session"]
     assert payload["synthetic"]["points"][-1]["session"] < payload["handoff_session"]
     assert {
@@ -67,6 +71,116 @@ def test_market_series_keeps_actual_prices_and_synthetic_index_separate(
     assert payload["prototype"]["points"][9]["drawdown"] < -0.20
     assert payload["prototype"]["policy_cutoff"] == "2020-02-03"
     assert payload["actual"]["actual_last_session"] == "2020-02-03"
+
+
+def test_market_series_exposes_joined_daily_rebalance_model_and_history_mode(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path, target_start_offset=10) as client:
+        response = client.get(
+            "/api/v1/market/series",
+            params={
+                "family_id": "nasdaq-100",
+                "target_symbol": "TQQQ",
+                "history_mode": "prototype_earliest",
+                "include_synthetic": "true",
+                "annual_management_fee": "0.01",
+                "daily_financing_drag": "0.0001",
+                "daily_roll_drag": "0.0002",
+                "daily_transaction_drag": "0.0003",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["history_mode"] == "prototype_earliest"
+    assert payload["history_start"] == "2020-01-01"
+    assert payload["join_session"] == payload["actual"]["points"][0]["session"]
+    assumptions = payload["model_assumptions"]
+    assert assumptions["method"] == "daily_rebalance"
+    assert assumptions["annual_management_fee"] == 0.01
+    assert assumptions["daily_financing_drag"] == 0.0001
+    assert assumptions["daily_roll_drag"] == 0.0002
+    assert assumptions["daily_transaction_drag"] == 0.0003
+    synthetic = payload["synthetic"]["points"]
+    actual = payload["actual"]["points"]
+    assert synthetic[-1]["session"] < payload["join_session"]
+    assert assumptions["join_scale"] > 0
+    assert synthetic[-1]["close"] > 0
+    assert actual[0]["close"] > 0
+
+
+def test_market_series_defaults_to_target_etf_inception(tmp_path: Path) -> None:
+    with _client(tmp_path, target_start_offset=10) as client:
+        response = client.get(
+            "/api/v1/market/series",
+            params={
+                "family_id": "nasdaq-100",
+                "target_symbol": "TQQQ",
+                "include_synthetic": "true",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["history_mode"] == "target_inception"
+    assert payload["history_start"] == payload["join_session"]
+    assert payload["actual"]["points"][0]["session"] == payload["join_session"]
+    assert payload["synthetic"]["points"] == []
+
+
+def test_market_series_scaled_synthetic_bridge_matches_actual_join_return(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    _seed(data_root)
+    catalog = DataCatalog(data_root)
+    target = catalog.read("TQQQ")
+    assert target is not None
+    catalog.store("TQQQ", MarketFrame(target.data.iloc[10:].copy()))
+    with TestClient(
+        create_app(
+            Settings(
+                database_path=tmp_path / "drawdown.sqlite",
+                data_root=data_root,
+            )
+        )
+    ) as client:
+        response = client.get(
+            "/api/v1/market/series",
+            params={
+                "family_id": "nasdaq-100",
+                "target_symbol": "TQQQ",
+                "history_mode": "prototype_earliest",
+                "include_synthetic": "true",
+                "annual_management_fee": "0.01",
+                "daily_financing_drag": "0.0001",
+                "daily_roll_drag": "0.0002",
+                "daily_transaction_drag": "0.0003",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    prototype = catalog.read("QQQ")
+    assert prototype is not None
+    model = synthetic_daily_reset_nav(
+        prototype,
+        3.0,
+        annual_management_fee=0.01,
+        daily_financing_drag=0.0001,
+        daily_roll_drag=0.0002,
+        daily_transaction_drag=0.0003,
+    )
+    actual_points = payload["actual"]["points"]
+    synthetic_points = payload["synthetic"]["points"]
+    assert synthetic_points[-1]["session"] == "2020-01-14"
+    assert actual_points[0]["session"] == "2020-01-15"
+    expected_join_ratio = float(model.nav.iloc[10] / model.nav.iloc[9])
+    observed_join_ratio = float(
+        actual_points[0]["close"] / synthetic_points[-1]["close"]
+    )
+    assert observed_join_ratio == pytest.approx(expected_join_ratio)
 
 
 def test_market_series_filters_dates_and_rejects_family_mismatch(tmp_path: Path) -> None:

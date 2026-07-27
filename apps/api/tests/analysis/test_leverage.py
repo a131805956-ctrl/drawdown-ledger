@@ -60,6 +60,42 @@ def test_daily_reset_synthetic_nav_uses_price_returns_not_total_returns() -> Non
     assert synthetic.nav.tolist() == pytest.approx([100.0, 80.0])
 
 
+def test_daily_reset_synthetic_nav_records_daily_rebalance_cost_assumptions() -> None:
+    prototype = _frame([100, 110, 99], start="2009-01-02")
+
+    synthetic = synthetic_daily_reset_nav(
+        prototype,
+        leverage=2.0,
+        initial_nav=100.0,
+        annual_management_fee=0.252,
+        daily_financing_drag=0.001,
+        daily_roll_drag=0.001,
+        daily_transaction_drag=0.001,
+    )
+
+    # 2x daily reset: (1 + 2*10% - 0.001 - 0.001 - 0.001 - 0.252/252)
+    # followed by (1 - 2*10% - the same daily drag).
+    assert synthetic.nav.tolist() == pytest.approx([100.0, 119.6, 95.2016])
+    assert synthetic.assumptions.method == "daily_rebalance"
+    assert synthetic.assumptions.annual_management_fee == pytest.approx(0.252)
+    assert synthetic.assumptions.daily_financing_drag == pytest.approx(0.001)
+    assert synthetic.assumptions.daily_roll_drag == pytest.approx(0.001)
+    assert synthetic.assumptions.daily_transaction_drag == pytest.approx(0.001)
+
+
+def test_annual_expense_ratio_remains_compatible_alias_for_management_fee() -> None:
+    prototype = _frame([100, 110], start="2009-01-02")
+
+    synthetic = synthetic_daily_reset_nav(
+        prototype,
+        leverage=2.0,
+        annual_expense_ratio=0.252,
+    )
+
+    assert synthetic.assumptions.annual_management_fee == pytest.approx(0.252)
+    assert synthetic.nav.iloc[-1] == pytest.approx(119.9)
+
+
 def test_synthetic_observations_never_count_as_actual_etf_evidence() -> None:
     actual = _frame([40, 41], start="2010-02-11")
     synthetic = synthetic_daily_reset_nav(

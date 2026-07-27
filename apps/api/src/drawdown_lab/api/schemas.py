@@ -132,6 +132,18 @@ class ChartSeriesResponse(ApiModel):
     points: tuple[ChartPointResponse, ...]
 
 
+class ModelAssumptionsResponse(ApiModel):
+    method: Literal["daily_rebalance"]
+    leverage: float
+    initial_nav: float
+    annual_management_fee: float
+    daily_financing_drag: float
+    daily_roll_drag: float
+    daily_transaction_drag: float
+    sessions_per_year: int
+    join_scale: float | None = None
+
+
 class MarketSeriesResponse(VersionedModel):
     family_id: str
     prototype_symbol: str
@@ -139,6 +151,13 @@ class MarketSeriesResponse(VersionedModel):
     target_symbol: str
     source_label: Literal["trusted_local_cache"] = "trusted_local_cache"
     handoff_session: date | None
+    history_mode: Literal["target_inception", "prototype_earliest", "custom"] = (
+        "target_inception"
+    )
+    history_start: date | None = None
+    history_end: date | None = None
+    join_session: date | None = None
+    model_assumptions: ModelAssumptionsResponse | None = None
     prototype: ChartSeriesResponse
     actual: ChartSeriesResponse
     synthetic: ChartSeriesResponse | None

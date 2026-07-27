@@ -11,10 +11,12 @@ from fastapi import APIRouter, HTTPException, Query, status
 from drawdown_lab.analysis.chart_series import (
     ChartSeries,
     actual_chart_series,
+    scale_chart_series,
     synthetic_chart_series,
 )
 from drawdown_lab.analysis.episodes import classify_episodes
 from drawdown_lab.analysis.evidence import analyze_evidence
+from drawdown_lab.analysis.leverage import synthetic_daily_reset_nav
 from drawdown_lab.analysis.strategy import StrategyResult, simulate_strategy
 from drawdown_lab.api.schemas import (
     ChartPointResponse,
@@ -35,6 +37,7 @@ from drawdown_lab.api.schemas import (
     JobResponse,
     MarketOverviewResponse,
     MarketSeriesResponse,
+    ModelAssumptionsResponse,
     OptimizationAcceptedResponse,
     OptimizationCreateRequest,
     PerformanceResponse,
@@ -409,20 +412,47 @@ def create_router(
         target_symbol: str,
         start: date | None = None,
         end: date | None = None,
+        history_mode: Literal[
+            "target_inception", "prototype_earliest", "custom"
+        ] = "target_inception",
         include_synthetic: bool = False,
         annual_expense_ratio: float = Query(default=0.0, ge=0.0, le=1.0),
+        annual_management_fee: float | None = Query(default=None, ge=0.0, le=1.0),
+        daily_financing_drag: float = Query(default=0.0, ge=0.0, le=1.0),
+        daily_roll_drag: float = Query(default=0.0, ge=0.0, le=1.0),
+        daily_transaction_drag: float = Query(default=0.0, ge=0.0, le=1.0),
         max_points: int = Query(
             default=MAX_MARKET_SERIES_POINTS,
             ge=1,
             le=MAX_MARKET_SERIES_POINTS,
         ),
     ) -> MarketSeriesResponse:
+        trusted = trusted_frames(family_id, target_symbol)
+        target = trusted.target
+        prototype_first = cast(pd.Timestamp, trusted.prototype.data.index[0]).date()
+        target_first = cast(pd.Timestamp, trusted.traded.data.index[0]).date()
+        if history_mode == "custom" and start is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Custom history mode requires a start date",
+            )
+        effective_start: date | None
+        if history_mode == "prototype_earliest":
+            effective_start = prototype_first if start is None else start
+        elif history_mode == "custom":
+            effective_start = start
+        else:
+            # Supplying start retains the original API's date-filter behavior;
+            # otherwise the ETF's first trusted session is the default.
+            effective_start = target_first if start is None else start
+        if effective_start is not None and end is not None and end < effective_start:
+            raise HTTPException(status_code=422, detail="End date cannot precede start date")
         if start is not None and end is not None and end < start:
             raise HTTPException(status_code=422, detail="End date cannot precede start date")
         if (
-            start is not None
+            effective_start is not None
             and end is not None
-            and (end - start).days > MAX_MARKET_SERIES_RANGE_DAYS
+            and (end - effective_start).days > MAX_MARKET_SERIES_RANGE_DAYS
         ):
             raise HTTPException(
                 status_code=422,
@@ -431,36 +461,75 @@ def create_router(
                     f"{MAX_MARKET_SERIES_RANGE_DAYS} days"
                 ),
             )
-        trusted = trusted_frames(family_id, target_symbol)
-        target = trusted.target
         handoff_session = cast(
             pd.Timestamp,
             trusted.traded.data.index[0],
         ).date()
         prototype_series = actual_chart_series(
             trusted.prototype,
-            start=start,
+            start=effective_start,
             end=end,
         )
         actual_series = actual_chart_series(
             trusted.traded,
-            start=start,
+            start=effective_start,
             end=end,
         )
         synthetic_end = handoff_session - timedelta(days=1)
         if end is not None:
             synthetic_end = min(synthetic_end, end)
-        stress_series = (
-            synthetic_chart_series(
-                trusted.prototype,
-                float(target.leverage),
-                annual_expense_ratio=annual_expense_ratio,
-                start=start,
-                end=synthetic_end,
-            )
-            if include_synthetic and target.leverage > 1
-            else None
+        management_fee = (
+            annual_expense_ratio
+            if annual_management_fee is None
+            else annual_management_fee
         )
+        synthetic_model = None
+        join_scale: float | None = None
+        stress_series = None
+        if include_synthetic and target.leverage > 1:
+            model_data = trusted.prototype.data.copy()
+            if effective_start is not None:
+                model_data = model_data.loc[model_data.index >= pd.Timestamp(effective_start)]
+            model_data = model_data.loc[
+                model_data.index <= pd.Timestamp(handoff_session)
+            ]
+            if not model_data.empty:
+                from drawdown_lab.data.models import MarketFrame
+
+                synthetic_model = synthetic_daily_reset_nav(
+                    MarketFrame(model_data),
+                    float(target.leverage),
+                    annual_management_fee=management_fee,
+                    daily_financing_drag=daily_financing_drag,
+                    daily_roll_drag=daily_roll_drag,
+                    daily_transaction_drag=daily_transaction_drag,
+                )
+                join_timestamp = pd.Timestamp(handoff_session)
+                join_nav = synthetic_model.nav.get(join_timestamp)
+                first_actual_close = (
+                    float(
+                        cast(
+                            float,
+                            trusted.traded.data.loc[join_timestamp, "price_close"],
+                        )
+                    )
+                    if join_timestamp in trusted.traded.data.index
+                    else None
+                )
+                if join_nav is not None and float(join_nav) > 0 and first_actual_close is not None:
+                    join_scale = first_actual_close / float(join_nav)
+                stress_series = synthetic_chart_series(
+                    MarketFrame(model_data),
+                    float(target.leverage),
+                    annual_management_fee=management_fee,
+                    daily_financing_drag=daily_financing_drag,
+                    daily_roll_drag=daily_roll_drag,
+                    daily_transaction_drag=daily_transaction_drag,
+                    start=effective_start,
+                    end=synthetic_end,
+                )
+                if join_scale is not None:
+                    stress_series = scale_chart_series(stress_series, join_scale)
         point_counts = (
             len(prototype_series.points),
             len(actual_series.points),
@@ -480,6 +549,25 @@ def create_router(
             prototype_source=trusted.prototype_source,
             target_symbol=target.symbol,
             handoff_session=handoff_session if target.leverage > 1 else None,
+            history_mode=history_mode,
+            history_start=effective_start,
+            history_end=end,
+            join_session=handoff_session if target.leverage > 1 else None,
+            model_assumptions=(
+                ModelAssumptionsResponse(
+                    method="daily_rebalance",
+                    leverage=float(target.leverage),
+                    initial_nav=synthetic_model.initial_nav,
+                    annual_management_fee=synthetic_model.assumptions.annual_management_fee,
+                    daily_financing_drag=synthetic_model.assumptions.daily_financing_drag,
+                    daily_roll_drag=synthetic_model.assumptions.daily_roll_drag,
+                    daily_transaction_drag=synthetic_model.assumptions.daily_transaction_drag,
+                    sessions_per_year=synthetic_model.assumptions.sessions_per_year,
+                    join_scale=join_scale,
+                )
+                if synthetic_model is not None
+                else None
+            ),
             prototype=_chart_response(
                 symbol=trusted.prototype_symbol,
                 leverage=1.0,
