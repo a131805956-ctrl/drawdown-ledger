@@ -30,6 +30,8 @@ const strategyResult: StrategyBacktestResponse = {
     source_kind: "actual",
     source_label: "trusted_local_cache",
     contribution_total: "80000",
+    invested_contribution_total: "20000",
+    reserved_contribution_total: "60000",
     dividend_income: "3200",
     interest_income: "1700",
     ending_cash: "12400",
