@@ -419,7 +419,7 @@ def create_router(
             "target_inception", "prototype_earliest", "custom"
         ] = "target_inception",
         include_synthetic: bool = False,
-        annual_expense_ratio: float = Query(default=0.0, ge=0.0, le=1.0),
+        annual_expense_ratio: float | None = Query(default=None, ge=0.0, le=1.0),
         annual_management_fee: float | None = Query(default=None, ge=0.0, le=1.0),
         daily_financing_drag: float | None = Query(default=None, ge=0.0, le=1.0),
         daily_roll_drag: float | None = Query(default=None, ge=0.0, le=1.0),
@@ -489,7 +489,7 @@ def create_router(
             if annual_management_fee is not None
             else (
                 annual_expense_ratio
-                if annual_expense_ratio > 0.0
+                if annual_expense_ratio is not None
                 else default_management_fee
             )
         )
